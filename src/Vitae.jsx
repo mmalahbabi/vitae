@@ -447,12 +447,34 @@ function Bloodwork() {
     ? fmtLongDate(markers.reduce((max, m) => (m.taken_on > max ? m.taken_on : max), markers[0].taken_on))
     : "No panels yet";
 
-  // Simulated lab extraction — production posts the PDF/photo to an OCR + parser
-  function onPickLab(e) {
+  async function onPickLab(e) {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
-    setScan({ status: "reading", count: 0 });
-    setTimeout(() => setScan({ status: "done", count: allMarkers.length }), 1900);
+    setScan({ status: "reading", count: 0, error: null });
+    if (!supabase) {
+      setScan({ status: "error", count: 0, error: "Supabase isn't connected." });
+      return;
+    }
+    try {
+      const b64 = await fileToBase64(file);
+      const { data, error } = await supabase.functions.invoke("analyze-lab", { body: { file: b64, mediaType: file.type } });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      const takenOn = data.takenOn || new Date().toISOString().slice(0, 10);
+      const rows = (data.markers || []).map((m) => ({
+        panel: m.panel, marker_key: m.key, value: m.value, unit: m.unit,
+        range_low: m.low ?? 0, range_high: m.high ?? null, taken_on: takenOn,
+      }));
+      if (rows.length > 0) {
+        const { error: upsertError } = await supabase.from("blood_markers")
+          .upsert(rows, { onConflict: "user_id,marker_key,taken_on" });
+        if (upsertError) throw upsertError;
+      }
+      await load();
+      setScan({ status: "done", count: rows.length, error: null });
+    } catch (err) {
+      setScan({ status: "error", count: 0, error: err.message || String(err) });
+    }
   }
 
   function openAdd() { setEditKey(null); setDraft(blank); setShowForm(true); }
@@ -576,7 +598,8 @@ function Bloodwork() {
 
       {/* Scan status */}
       {scan.status !== "idle" && (
-        <Card style={{ background: scan.status === "done" ? C.tealSoft : C.bg, borderColor: scan.status === "done" ? C.teal : C.line,
+        <Card style={{ background: scan.status === "done" ? C.tealSoft : scan.status === "error" ? C.coralSoft : C.bg,
+          borderColor: scan.status === "done" ? C.teal : scan.status === "error" ? C.coral : C.line,
           display: "flex", alignItems: "center", gap: 14 }}>
           {scan.status === "reading" ? (
             <>
@@ -586,16 +609,27 @@ function Bloodwork() {
                 <div style={{ font: `400 12px ${FONT_MONO}`, color: C.mute }}>Extracting markers, values and reference ranges</div>
               </div>
             </>
+          ) : scan.status === "error" ? (
+            <>
+              <AlertCircle size={20} color={C.coral} />
+              <div style={{ flex: 1 }}>
+                <div style={{ font: `600 14px ${FONT_BODY}`, color: C.coral }}>Couldn't read that lab report</div>
+                <div style={{ font: `400 12px ${FONT_BODY}`, color: C.ink }}>{scan.error}</div>
+              </div>
+              <button onClick={() => setScan({ status: "idle", count: 0, error: null })}
+                style={{ appearance: "none", border: `1px solid ${C.line}`, background: C.bg, cursor: "pointer", color: C.mute,
+                  font: `600 12px ${FONT_BODY}`, padding: "7px 12px", borderRadius: 8 }}>Dismiss</button>
+            </>
           ) : (
             <>
               <Check size={20} color={C.teal} />
               <div style={{ flex: 1 }}>
                 <div style={{ font: `600 14px ${FONT_BODY}`, color: C.teal }}>Lab parsed — {scan.count} markers found</div>
                 <div style={{ font: `400 12px ${FONT_BODY}`, color: C.mute }}>
-                  In the live app each value appends to its timeline as a new dated panel. Review below.
+                  Each value appended to its timeline as a new dated panel. Review below.
                 </div>
               </div>
-              <button onClick={() => setScan({ status: "idle", count: 0 })}
+              <button onClick={() => setScan({ status: "idle", count: 0, error: null })}
                 style={{ appearance: "none", border: `1px solid ${C.line}`, background: C.bg, cursor: "pointer", color: C.mute,
                   font: `600 12px ${FONT_BODY}`, padding: "7px 12px", borderRadius: 8 }}>Dismiss</button>
             </>
@@ -1014,28 +1048,28 @@ function Protocols() {
   const active = protocols.filter((p) => p.status !== "archived");
   const archive = protocols.filter((p) => p.status === "archived");
 
-  const SAMPLE_READS = [
-    { type: "peptide", name: "BPC-157", dose: 250, unit: "mcg", purpose: "Recovery / gut", durationDays: 28, slot: "AM" },
-    { type: "peptide", name: "Ipamorelin", dose: 300, unit: "mcg", purpose: "GH support / sleep", durationDays: 56, slot: "PM" },
-    { type: "peptide", name: "TB-500", dose: 2.5, unit: "mg", purpose: "Tissue repair", durationDays: 42, slot: "AM" },
-    { type: "supplement", name: "Multivitamin", dose: 1, unit: "tab", purpose: "Daily baseline", durationDays: 30, slot: "AM" },
-    { type: "supplement", name: "Vitamin D3 + K2", dose: 5000, unit: "IU", purpose: "Bone / immune", durationDays: 90, slot: "AM" },
-    { type: "supplement", name: "Omega-3", dose: 1000, unit: "mg", purpose: "Heart / inflammation", durationDays: 60, slot: "AM" },
-  ];
-
-  function onPickPhoto(e) {
+  async function onPickPhoto(e) {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
     const url = URL.createObjectURL(file);
-    setScan({ status: "reading", preview: url, detectedType: null });
+    setScan({ status: "reading", preview: url, detectedType: null, error: null });
     setEditingId(null);
     setShowForm(true);
-    setTimeout(() => {
-      const read = SAMPLE_READS[Math.floor(Math.random() * SAMPLE_READS.length)];
-      setDraft((dr) => ({ ...dr, type: read.type, name: read.name, dose: String(read.dose),
-        unit: read.unit, purpose: read.purpose, durationDays: String(read.durationDays), slot: read.slot }));
-      setScan({ status: "done", preview: url, detectedType: read.type });
-    }, 1600);
+    if (!supabase) {
+      setScan({ status: "error", preview: url, detectedType: null, error: "Supabase isn't connected." });
+      return;
+    }
+    try {
+      const image = await fileToBase64(file);
+      const { data, error } = await supabase.functions.invoke("analyze-label", { body: { image, mediaType: file.type } });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      setDraft((dr) => ({ ...dr, type: data.type === "supplement" ? "supplement" : "peptide", name: data.name || "",
+        dose: String(data.dose ?? ""), unit: data.unit || (data.type === "supplement" ? "tab" : "mcg"), purpose: data.purpose || "" }));
+      setScan({ status: "done", preview: url, detectedType: data.type, error: null });
+    } catch (err) {
+      setScan({ status: "error", preview: url, detectedType: null, error: err.message || String(err) });
+    }
   }
 
   const slots = { AM: active.filter((p) => p.slot === "AM"), PM: active.filter((p) => p.slot === "PM") };
@@ -1206,7 +1240,8 @@ function Protocols() {
                 </div>
                 {scan.status !== "idle" && (
                   <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 16,
-                    background: scan.status === "done" ? C.tealSoft : C.bg, border: `1px solid ${scan.status === "done" ? C.teal : C.line}`,
+                    background: scan.status === "done" ? C.tealSoft : scan.status === "error" ? C.coralSoft : C.bg,
+                    border: `1px solid ${scan.status === "done" ? C.teal : scan.status === "error" ? C.coral : C.line}`,
                     borderRadius: 12, padding: 12 }}>
                     <div style={{ width: 56, height: 56, borderRadius: 10, overflow: "hidden", flexShrink: 0, background: C.line, display: "grid", placeItems: "center" }}>
                       {scan.preview && <img src={scan.preview} alt="Captured label" style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
@@ -1216,6 +1251,11 @@ function Protocols() {
                         <>
                           <div style={{ font: `600 13px ${FONT_BODY}`, color: C.ink }}>Reading label…</div>
                           <div style={{ font: `400 11px ${FONT_MONO}`, color: C.mute }}>Extracting name, dose and concentration</div>
+                        </>
+                      ) : scan.status === "error" ? (
+                        <>
+                          <div style={{ font: `600 13px ${FONT_BODY}`, color: C.coral }}>Couldn't read that label</div>
+                          <div style={{ font: `400 11px ${FONT_BODY}`, color: C.ink }}>{scan.error}</div>
                         </>
                       ) : (
                         <>
