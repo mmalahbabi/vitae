@@ -89,11 +89,21 @@ function groupMarkers(rows) {
 }
 
 const meals = [
-  { name: "Greek yogurt & berries", kcal: 240, conf: 0.94, time: "08:10", p: 18, c: 28, f: 6 },
-  { name: "Grilled chicken salad", kcal: 520, conf: 0.88, time: "13:25", p: 42, c: 24, f: 22 },
-  { name: "Apple & almonds", kcal: 210, conf: 0.91, time: "16:40", p: 6, c: 22, f: 13 },
-  { name: "Salmon, rice, greens", kcal: 670, conf: 0.83, time: "19:50", p: 38, c: 55, f: 28 },
+  { id: "demo-1", name: "Greek yogurt & berries", kcal: 240, conf: 0.94, time: "08:10", p: 18, c: 28, f: 6, cookingMethod: "raw", quantity: 1 },
+  { id: "demo-2", name: "Grilled chicken salad", kcal: 520, conf: 0.88, time: "13:25", p: 42, c: 24, f: 22, cookingMethod: "grilled", quantity: 1 },
+  { id: "demo-3", name: "Apple & almonds", kcal: 210, conf: 0.91, time: "16:40", p: 6, c: 22, f: 13, cookingMethod: "raw", quantity: 1 },
+  { id: "demo-4", name: "Salmon, rice, greens", kcal: 670, conf: 0.83, time: "19:50", p: 38, c: 55, f: 28, cookingMethod: "baked", quantity: 1 },
 ];
+
+// Maps a `meals` DB row to the shape the Nutrition UI renders.
+function shapeMeal(r) {
+  return {
+    id: r.id, name: r.name, kcal: Math.round(r.kcal), conf: r.confidence ?? 0.8,
+    time: new Date(r.logged_at).toTimeString().slice(0, 5),
+    p: Math.round(r.protein || 0), c: Math.round(r.carbs || 0), f: Math.round(r.fat || 0),
+    cookingMethod: r.cooking_method || "", quantity: r.quantity ?? 1,
+  };
+}
 
 const workouts = [
   { type: "Running", dur: "42 min", dist: "7.1 km", kcal: 540, hr: 152, when: "Today · 06:30", icon: Footprints },
@@ -207,7 +217,7 @@ function SupabaseSetupNotice() {
       </div>
       <div style={{ font: `400 13px ${FONT_BODY}`, color: C.ink, marginTop: 8, lineHeight: 1.5 }}>
         Add <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_ANON_KEY</code> to a <code>.env.local</code> file
-        (see <code>.env.example</code>), run the migration in <code>supabase/migrations/0001_init.sql</code>,
+        (see <code>.env.example</code>), run the migrations in <code>supabase/migrations/</code>,
         and restart the dev server to save real data here.
       </div>
     </Card>
@@ -759,20 +769,31 @@ function fileToBase64(file) {
 
 function Nutrition() {
   const [mealList, setMealList] = useState(meals);
-  const [scan, setScan] = useState({ status: "idle", preview: null, error: null }); // idle | reading | review | error
+  const [scan, setScan] = useState({ status: "idle", preview: null, image: null, mediaType: null, error: null }); // idle | reading | review | error
   const [draft, setDraft] = useState(null);
+  const [editingId, setEditingId] = useState(null); // null = new meal from a photo; id = editing an already-logged meal
+  const [recalculating, setRecalculating] = useState(false);
+  const [recalcError, setRecalcError] = useState(null);
   const fileRef = React.useRef(null);
 
   const total = mealList.reduce((s, m) => s + m.kcal, 0);
   const macros = mealList.reduce((a, m) => ({ p: a.p + m.p, c: a.c + m.c, f: a.f + m.f }), { p: 0, c: 0, f: 0 });
 
+  const load = useCallback(async () => {
+    if (!supabase) return;
+    const { data } = await supabase.from("meals").select("*").order("logged_at");
+    if (data) setMealList(data.map(shapeMeal));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
   async function onPickPhoto(e) {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
     const preview = URL.createObjectURL(file);
-    setScan({ status: "reading", preview, error: null });
+    setEditingId(null);
+    setScan({ status: "reading", preview, image: null, mediaType: null, error: null });
     if (!supabase) {
-      setScan({ status: "error", preview, error: "Supabase isn't connected — see the Bloodwork or Protocols tab for setup." });
+      setScan({ status: "error", preview, image: null, mediaType: null, error: "Supabase isn't connected — see the Bloodwork or Protocols tab for setup." });
       return;
     }
     try {
@@ -781,30 +802,82 @@ function Nutrition() {
       if (error) throw error;
       if (data?.error) throw new Error(data.error);
       setDraft({ name: data.name || "", kcal: String(data.kcal ?? ""), protein: String(data.protein ?? ""),
-        carbs: String(data.carbs ?? ""), fat: String(data.fat ?? ""), confidence: data.confidence ?? 0.8 });
-      setScan({ status: "review", preview, error: null });
+        carbs: String(data.carbs ?? ""), fat: String(data.fat ?? ""), confidence: data.confidence ?? 0.8,
+        cookingMethod: data.cooking_method || "", quantity: String(data.quantity ?? 1) });
+      setScan({ status: "review", preview, image, mediaType: file.type, error: null });
+      setRecalcError(null);
     } catch (err) {
-      setScan({ status: "error", preview, error: err.message || String(err) });
+      setScan({ status: "error", preview, image: null, mediaType: null, error: err.message || String(err) });
     }
   }
 
-  function confirmMeal() {
-    if (!draft || !draft.name || draft.kcal === "") return;
-    setMealList((ms) => [...ms, {
-      name: draft.name, kcal: Math.round(parseFloat(draft.kcal) || 0), conf: draft.confidence,
-      time: new Date().toTimeString().slice(0, 5),
-      p: Math.round(parseFloat(draft.protein) || 0), c: Math.round(parseFloat(draft.carbs) || 0), f: Math.round(parseFloat(draft.fat) || 0),
-    }]);
+  // Tap a logged meal to reopen the same review form — the photo itself
+  // isn't kept, but corrections (cooking method, piece count...) still work
+  // via a text-only AI recalculation.
+  function openEdit(m) {
+    setEditingId(m.id);
+    setDraft({ name: m.name, kcal: String(m.kcal), protein: String(m.p), carbs: String(m.c), fat: String(m.f),
+      confidence: m.conf, cookingMethod: m.cookingMethod || "", quantity: String(m.quantity ?? 1) });
+    setScan({ status: "review", preview: null, image: null, mediaType: null, error: null });
+    setRecalcError(null);
+  }
+
+  // Re-runs the AI estimate from the corrected cooking method / piece count /
+  // name instead of making the user redo the calorie math by hand. Reuses
+  // the original photo if it's still in memory (pre-save review); otherwise
+  // Claude recalculates from the dish name + prior estimate + corrections.
+  async function recalcFromAI() {
+    if (!supabase || !draft) return;
+    setRecalculating(true);
+    setRecalcError(null);
+    try {
+      const body = {
+        corrections: { name: draft.name, cookingMethod: draft.cookingMethod, quantity: draft.quantity },
+        previous: { kcal: draft.kcal, protein: draft.protein, carbs: draft.carbs, fat: draft.fat },
+      };
+      if (scan.image) { body.image = scan.image; body.mediaType = scan.mediaType; }
+      const { data, error } = await supabase.functions.invoke("analyze-meal", { body });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      setDraft((d) => ({ ...d, kcal: String(data.kcal ?? d.kcal), protein: String(data.protein ?? d.protein),
+        carbs: String(data.carbs ?? d.carbs), fat: String(data.fat ?? d.fat), confidence: data.confidence ?? d.confidence,
+        cookingMethod: data.cooking_method || d.cookingMethod, quantity: String(data.quantity ?? d.quantity) }));
+    } catch (err) {
+      setRecalcError(err.message || String(err));
+    } finally {
+      setRecalculating(false);
+    }
+  }
+
+  async function confirmMeal() {
+    if (!draft || !draft.name || draft.kcal === "" || !supabase) return;
+    const patch = {
+      name: draft.name, kcal: parseFloat(draft.kcal) || 0, protein: parseFloat(draft.protein) || 0,
+      carbs: parseFloat(draft.carbs) || 0, fat: parseFloat(draft.fat) || 0, confidence: draft.confidence,
+      cooking_method: draft.cookingMethod || null, quantity: parseFloat(draft.quantity) || 1,
+    };
+    if (editingId != null) {
+      await supabase.from("meals").update(patch).eq("id", editingId);
+    } else {
+      await supabase.from("meals").insert(patch);
+    }
+    await load();
     dismissScan();
   }
   function dismissScan() {
-    setScan({ status: "idle", preview: null, error: null });
+    setScan({ status: "idle", preview: null, image: null, mediaType: null, error: null });
     setDraft(null);
+    setEditingId(null);
+    setRecalcError(null);
     if (fileRef.current) fileRef.current.value = "";
   }
 
+  const inputStyle = { font: `400 14px ${FONT_BODY}`, padding: "10px 12px",
+    border: `1px solid ${C.line}`, borderRadius: 10, background: C.bg, color: C.ink, width: "100%", boxSizing: "border-box" };
+
   return (
     <div style={{ display: "grid", gap: 16 }}>
+      {!supabase && <SupabaseSetupNotice />}
       {/* AI capture strip */}
       <Card style={{ display: "flex", alignItems: "center", gap: 16, background: C.tealSoft, borderColor: C.tealSoft }}>
         <div style={{ width: 52, height: 52, borderRadius: 14, background: C.teal, display: "grid", placeItems: "center", flexShrink: 0 }}>
@@ -852,7 +925,7 @@ function Nutrition() {
           <div style={{ display: "flex", gap: 14, marginBottom: 14 }}>
             {scan.preview && <img src={scan.preview} alt="Captured meal" style={{ width: 56, height: 56, borderRadius: 10, objectFit: "cover", flexShrink: 0 }} />}
             <div>
-              <div style={{ font: `600 14px ${FONT_BODY}` }}>Confirm before saving</div>
+              <div style={{ font: `600 14px ${FONT_BODY}` }}>{editingId != null ? "Edit meal" : "Confirm before saving"}</div>
               <div style={{ font: `400 11px ${FONT_MONO}`, color: draft.confidence > 0.9 ? C.teal : C.amber }}>
                 {Math.round(draft.confidence * 100)}% confidence — edit anything that looks off
               </div>
@@ -861,34 +934,63 @@ function Nutrition() {
           <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10, marginBottom: 10 }} className="pf-row">
             <div>
               <label style={{ font: `500 11px ${FONT_MONO}`, color: C.mute, display: "block", marginBottom: 5 }}>DISH</label>
-              <input style={{ font: `400 14px ${FONT_BODY}`, padding: "10px 12px", border: `1px solid ${C.line}`, borderRadius: 10,
-                background: C.bg, color: C.ink, width: "100%", boxSizing: "border-box" }}
+              <input style={inputStyle}
                 value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
             </div>
             <div>
               <label style={{ font: `500 11px ${FONT_MONO}`, color: C.mute, display: "block", marginBottom: 5 }}>KCAL</label>
-              <input type="number" style={{ font: `400 14px ${FONT_BODY}`, padding: "10px 12px", border: `1px solid ${C.line}`, borderRadius: 10,
-                background: C.bg, color: C.ink, width: "100%", boxSizing: "border-box" }}
+              <input type="number" style={inputStyle}
                 value={draft.kcal} onChange={(e) => setDraft({ ...draft, kcal: e.target.value })} />
             </div>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 16 }} className="pf-row">
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }} className="pf-row">
+            <div>
+              <label style={{ font: `500 11px ${FONT_MONO}`, color: C.mute, display: "block", marginBottom: 5 }}>COOKING METHOD</label>
+              <input style={inputStyle} list="cooking-methods" placeholder="e.g. air-fried"
+                value={draft.cookingMethod} onChange={(e) => setDraft({ ...draft, cookingMethod: e.target.value })} />
+              <datalist id="cooking-methods">
+                {["Grilled", "Baked / roasted", "Air-fried", "Pan-fried", "Deep-fried", "Breaded & fried", "Steamed", "Boiled", "Raw"].map((o) => <option key={o} value={o} />)}
+              </datalist>
+            </div>
+            <div>
+              <label style={{ font: `500 11px ${FONT_MONO}`, color: C.mute, display: "block", marginBottom: 5 }}>PIECES / SERVINGS</label>
+              <input type="number" min="0" step="1" style={inputStyle}
+                value={draft.quantity} onChange={(e) => setDraft({ ...draft, quantity: e.target.value })} />
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 12 }} className="pf-row">
             {[["protein", "PROTEIN (G)"], ["carbs", "CARBS (G)"], ["fat", "FAT (G)"]].map(([key, label]) => (
               <div key={key}>
                 <label style={{ font: `500 11px ${FONT_MONO}`, color: C.mute, display: "block", marginBottom: 5 }}>{label}</label>
-                <input type="number" style={{ font: `400 14px ${FONT_BODY}`, padding: "10px 12px", border: `1px solid ${C.line}`, borderRadius: 10,
-                  background: C.bg, color: C.ink, width: "100%", boxSizing: "border-box" }}
+                <input type="number" style={inputStyle}
                   value={draft[key]} onChange={(e) => setDraft({ ...draft, [key]: e.target.value })} />
               </div>
             ))}
           </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+            <button onClick={recalcFromAI} disabled={recalculating}
+              style={{ appearance: "none", border: `1px solid ${C.teal}`, background: C.bg, cursor: recalculating ? "default" : "pointer",
+                color: C.teal, opacity: recalculating ? 0.6 : 1, font: `600 12px ${FONT_BODY}`, padding: "8px 14px", borderRadius: 9,
+                display: "flex", alignItems: "center", gap: 6 }}>
+              {recalculating && <div style={{ width: 12, height: 12, border: `2px solid ${C.tealSoft}`, borderTopColor: C.teal, borderRadius: 99, animation: "vspin 0.7s linear infinite" }} />}
+              {recalculating ? "Recalculating…" : "Recalculate with AI"}
+            </button>
+            <span style={{ font: `400 11px ${FONT_MONO}`, color: C.mute }}>
+              Corrected the cooking method or count? Let the AI redo the math instead of guessing new numbers.
+            </span>
+          </div>
+          {recalcError && (
+            <div style={{ font: `400 12px ${FONT_BODY}`, color: C.coral, marginBottom: 12 }}>{recalcError}</div>
+          )}
+
           <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
             <button onClick={dismissScan}
               style={{ appearance: "none", border: `1px solid ${C.line}`, background: C.bg, cursor: "pointer", color: C.mute,
-                font: `600 13px ${FONT_BODY}`, padding: "9px 16px", borderRadius: 10 }}>Discard</button>
+                font: `600 13px ${FONT_BODY}`, padding: "9px 16px", borderRadius: 10 }}>{editingId != null ? "Cancel" : "Discard"}</button>
             <button onClick={confirmMeal}
               style={{ appearance: "none", border: "none", background: C.teal, cursor: "pointer", color: "#fff",
-                font: `600 13px ${FONT_BODY}`, padding: "9px 18px", borderRadius: 10 }}>Save meal</button>
+                font: `600 13px ${FONT_BODY}`, padding: "9px 18px", borderRadius: 10 }}>{editingId != null ? "Save changes" : "Save meal"}</button>
           </div>
         </Card>
       )}
@@ -899,16 +1001,20 @@ function Nutrition() {
           <Eyebrow>Today · {mealList.length} meals · {total} kcal</Eyebrow>
           <div style={{ marginTop: 14, display: "grid", gap: 4 }}>
             {mealList.map((m, i) => (
-              <div key={i} style={{ display: "flex", alignItems: "center", gap: 14, padding: "12px 0",
+              <div key={m.id} onClick={() => openEdit(m)} role="button" tabIndex={0}
+                onKeyDown={(e) => { if (e.key === "Enter") openEdit(m); }}
+                style={{ display: "flex", alignItems: "center", gap: 14, padding: "12px 0", cursor: "pointer",
                 borderBottom: i < mealList.length - 1 ? `1px solid ${C.line}` : "none" }}>
                 <div style={{ width: 44, height: 44, borderRadius: 11, background: C.coralSoft,
                   display: "grid", placeItems: "center", flexShrink: 0 }}>
                   <Utensils size={18} color={C.coral} />
                 </div>
-                <div style={{ flex: 1 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ font: `600 14px ${FONT_BODY}` }}>{m.name}</div>
                   <div style={{ font: `400 11px ${FONT_MONO}`, color: C.mute }}>
                     {m.time} · P{m.p} C{m.c} F{m.f}
+                    {m.cookingMethod ? ` · ${m.cookingMethod}` : ""}
+                    {m.quantity > 1 ? ` · ×${m.quantity}` : ""}
                   </div>
                 </div>
                 <div style={{ textAlign: "right" }}>
@@ -918,6 +1024,7 @@ function Nutrition() {
                     <Check size={10} /> {Math.round(m.conf * 100)}%
                   </div>
                 </div>
+                <Pencil size={13} color={C.mute} style={{ flexShrink: 0 }} />
               </div>
             ))}
           </div>
@@ -935,7 +1042,7 @@ function Nutrition() {
                     <span>{label}</span><span style={{ font: `400 12px ${FONT_MONO}`, color: C.mute }}>{g}g</span>
                   </div>
                   <div style={{ height: 8, background: C.line, borderRadius: 99, overflow: "hidden" }}>
-                    <div style={{ width: `${(g / sum) * 100}%`, height: "100%", background: col, borderRadius: 99 }} />
+                    <div style={{ width: `${sum ? (g / sum) * 100 : 0}%`, height: "100%", background: col, borderRadius: 99 }} />
                   </div>
                 </div>
               );
@@ -943,7 +1050,7 @@ function Nutrition() {
           </div>
           <div style={{ marginTop: 22, padding: 14, background: C.panel, borderRadius: 12,
             font: `400 12px ${FONT_BODY}`, color: C.mute, lineHeight: 1.5 }}>
-            Confidence below 85% is flagged amber — tap any meal to correct the AI's estimate.
+            Tap any meal to correct the cooking method, piece count or macros — Recalculate with AI redoes the math for you.
           </div>
         </Card>
       </div>
