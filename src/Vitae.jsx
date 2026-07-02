@@ -714,9 +714,61 @@ function Bloodwork() {
 }
 
 // ---------- NUTRITION ----------
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",")[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
 function Nutrition() {
-  const total = meals.reduce((s, m) => s + m.kcal, 0);
-  const macros = meals.reduce((a, m) => ({ p: a.p + m.p, c: a.c + m.c, f: a.f + m.f }), { p: 0, c: 0, f: 0 });
+  const [mealList, setMealList] = useState(meals);
+  const [scan, setScan] = useState({ status: "idle", preview: null, error: null }); // idle | reading | review | error
+  const [draft, setDraft] = useState(null);
+  const fileRef = React.useRef(null);
+
+  const total = mealList.reduce((s, m) => s + m.kcal, 0);
+  const macros = mealList.reduce((a, m) => ({ p: a.p + m.p, c: a.c + m.c, f: a.f + m.f }), { p: 0, c: 0, f: 0 });
+
+  async function onPickPhoto(e) {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    const preview = URL.createObjectURL(file);
+    setScan({ status: "reading", preview, error: null });
+    if (!supabase) {
+      setScan({ status: "error", preview, error: "Supabase isn't connected — see the Bloodwork or Protocols tab for setup." });
+      return;
+    }
+    try {
+      const image = await fileToBase64(file);
+      const { data, error } = await supabase.functions.invoke("analyze-meal", { body: { image, mediaType: file.type } });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      setDraft({ name: data.name || "", kcal: String(data.kcal ?? ""), protein: String(data.protein ?? ""),
+        carbs: String(data.carbs ?? ""), fat: String(data.fat ?? ""), confidence: data.confidence ?? 0.8 });
+      setScan({ status: "review", preview, error: null });
+    } catch (err) {
+      setScan({ status: "error", preview, error: err.message || String(err) });
+    }
+  }
+
+  function confirmMeal() {
+    if (!draft || !draft.name || draft.kcal === "") return;
+    setMealList((ms) => [...ms, {
+      name: draft.name, kcal: Math.round(parseFloat(draft.kcal) || 0), conf: draft.confidence,
+      time: new Date().toTimeString().slice(0, 5),
+      p: Math.round(parseFloat(draft.protein) || 0), c: Math.round(parseFloat(draft.carbs) || 0), f: Math.round(parseFloat(draft.fat) || 0),
+    }]);
+    dismissScan();
+  }
+  function dismissScan() {
+    setScan({ status: "idle", preview: null, error: null });
+    setDraft(null);
+    if (fileRef.current) fileRef.current.value = "";
+  }
+
   return (
     <div style={{ display: "grid", gap: 16 }}>
       {/* AI capture strip */}
@@ -730,20 +782,91 @@ function Nutrition() {
             AI estimates calories & macros from the photo. You confirm before it saves.
           </div>
         </div>
-        <button style={{ appearance: "none", border: "none", cursor: "pointer", background: C.teal, color: "#fff",
+        <input ref={fileRef} type="file" accept="image/*" capture="environment" onChange={onPickPhoto} style={{ display: "none" }} />
+        <button onClick={() => fileRef.current && fileRef.current.click()}
+          style={{ appearance: "none", border: "none", cursor: "pointer", background: C.teal, color: "#fff",
           font: `600 13px ${FONT_BODY}`, padding: "11px 18px", borderRadius: 12, display: "flex", alignItems: "center", gap: 6 }}>
           <Plus size={15} /> Add photo
         </button>
       </Card>
 
+      {scan.status === "reading" && (
+        <Card style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          {scan.preview && <img src={scan.preview} alt="Captured meal" style={{ width: 56, height: 56, borderRadius: 10, objectFit: "cover", flexShrink: 0 }} />}
+          <div style={{ width: 18, height: 18, border: `2px solid ${C.line}`, borderTopColor: C.teal, borderRadius: 99, animation: "vspin 0.7s linear infinite" }} />
+          <div>
+            <div style={{ font: `600 13px ${FONT_BODY}` }}>Reading your photo…</div>
+            <div style={{ font: `400 11px ${FONT_MONO}`, color: C.mute }}>Estimating calories and macros</div>
+          </div>
+        </Card>
+      )}
+
+      {scan.status === "error" && (
+        <Card style={{ borderColor: C.coral, background: C.coralSoft }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <AlertCircle size={16} color={C.coral} /><Eyebrow>Couldn't read that photo</Eyebrow>
+          </div>
+          <div style={{ font: `400 12px ${FONT_BODY}`, color: C.ink, marginTop: 8 }}>{scan.error}</div>
+          <button onClick={dismissScan}
+            style={{ appearance: "none", border: `1px solid ${C.line}`, background: C.bg, cursor: "pointer", color: C.mute,
+              font: `600 12px ${FONT_BODY}`, padding: "7px 12px", borderRadius: 8, marginTop: 10 }}>Dismiss</button>
+        </Card>
+      )}
+
+      {scan.status === "review" && draft && (
+        <Card>
+          <div style={{ display: "flex", gap: 14, marginBottom: 14 }}>
+            {scan.preview && <img src={scan.preview} alt="Captured meal" style={{ width: 56, height: 56, borderRadius: 10, objectFit: "cover", flexShrink: 0 }} />}
+            <div>
+              <div style={{ font: `600 14px ${FONT_BODY}` }}>Confirm before saving</div>
+              <div style={{ font: `400 11px ${FONT_MONO}`, color: draft.confidence > 0.9 ? C.teal : C.amber }}>
+                {Math.round(draft.confidence * 100)}% confidence — edit anything that looks off
+              </div>
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10, marginBottom: 10 }} className="pf-row">
+            <div>
+              <label style={{ font: `500 11px ${FONT_MONO}`, color: C.mute, display: "block", marginBottom: 5 }}>DISH</label>
+              <input style={{ font: `400 14px ${FONT_BODY}`, padding: "10px 12px", border: `1px solid ${C.line}`, borderRadius: 10,
+                background: C.bg, color: C.ink, width: "100%", boxSizing: "border-box" }}
+                value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
+            </div>
+            <div>
+              <label style={{ font: `500 11px ${FONT_MONO}`, color: C.mute, display: "block", marginBottom: 5 }}>KCAL</label>
+              <input type="number" style={{ font: `400 14px ${FONT_BODY}`, padding: "10px 12px", border: `1px solid ${C.line}`, borderRadius: 10,
+                background: C.bg, color: C.ink, width: "100%", boxSizing: "border-box" }}
+                value={draft.kcal} onChange={(e) => setDraft({ ...draft, kcal: e.target.value })} />
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 16 }} className="pf-row">
+            {[["protein", "PROTEIN (G)"], ["carbs", "CARBS (G)"], ["fat", "FAT (G)"]].map(([key, label]) => (
+              <div key={key}>
+                <label style={{ font: `500 11px ${FONT_MONO}`, color: C.mute, display: "block", marginBottom: 5 }}>{label}</label>
+                <input type="number" style={{ font: `400 14px ${FONT_BODY}`, padding: "10px 12px", border: `1px solid ${C.line}`, borderRadius: 10,
+                  background: C.bg, color: C.ink, width: "100%", boxSizing: "border-box" }}
+                  value={draft[key]} onChange={(e) => setDraft({ ...draft, [key]: e.target.value })} />
+              </div>
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+            <button onClick={dismissScan}
+              style={{ appearance: "none", border: `1px solid ${C.line}`, background: C.bg, cursor: "pointer", color: C.mute,
+                font: `600 13px ${FONT_BODY}`, padding: "9px 16px", borderRadius: 10 }}>Discard</button>
+            <button onClick={confirmMeal}
+              style={{ appearance: "none", border: "none", background: C.teal, cursor: "pointer", color: "#fff",
+                font: `600 13px ${FONT_BODY}`, padding: "9px 18px", borderRadius: 10 }}>Save meal</button>
+          </div>
+        </Card>
+      )}
+
       <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: 16 }} className="nut-split">
         {/* Meal log */}
         <Card>
-          <Eyebrow>Today · {meals.length} meals · {total} kcal</Eyebrow>
+          <Eyebrow>Today · {mealList.length} meals · {total} kcal</Eyebrow>
           <div style={{ marginTop: 14, display: "grid", gap: 4 }}>
-            {meals.map((m, i) => (
+            {mealList.map((m, i) => (
               <div key={i} style={{ display: "flex", alignItems: "center", gap: 14, padding: "12px 0",
-                borderBottom: i < meals.length - 1 ? `1px solid ${C.line}` : "none" }}>
+                borderBottom: i < mealList.length - 1 ? `1px solid ${C.line}` : "none" }}>
                 <div style={{ width: 44, height: 44, borderRadius: 11, background: C.coralSoft,
                   display: "grid", placeItems: "center", flexShrink: 0 }}>
                   <Utensils size={18} color={C.coral} />
