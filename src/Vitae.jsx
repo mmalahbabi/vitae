@@ -9,7 +9,7 @@ import {
   Syringe, Clock, Pill, Sun, Pencil, Archive, Circle, RotateCcw, Trash2, MoreHorizontal,
   TrendingUp, TrendingDown, Upload, Link2,
 } from "lucide-react";
-import { supabase, ensureSession } from "./lib/supabaseClient";
+import { supabase } from "./lib/supabaseClient";
 
 // ============================================================
 // Vitae — personal health platform prototype
@@ -146,6 +146,58 @@ function Card({ children, style }) {
     padding: 20, ...style }}>{children}</div>;
 }
 
+const authInputStyle = { font: `400 14px ${FONT_BODY}`, padding: "11px 13px",
+  border: `1px solid ${C.line}`, borderRadius: 10, background: C.bg, color: C.ink, width: "100%", boxSizing: "border-box" };
+
+function AuthScreen() {
+  const [mode, setMode] = useState("signin"); // signin | signup
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [info, setInfo] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e) {
+    e.preventDefault();
+    setError(""); setInfo(""); setBusy(true);
+    const { data, error } = mode === "signin"
+      ? await supabase.auth.signInWithPassword({ email, password })
+      : await supabase.auth.signUp({ email, password });
+    setBusy(false);
+    if (error) { setError(error.message); return; }
+    if (mode === "signup" && !data.session) setInfo("Check your email to confirm your account, then sign in.");
+  }
+
+  return (
+    <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", background: C.panel, fontFamily: FONT_BODY, padding: 16 }}>
+      <Card style={{ width: 340, maxWidth: "100%" }}>
+        <div style={{ font: `700 26px ${FONT_DISPLAY}`, letterSpacing: "-0.01em" }}>Vitae</div>
+        <div style={{ font: `400 13px ${FONT_BODY}`, color: C.mute, marginTop: 4, marginBottom: 20 }}>
+          {mode === "signin" ? "Sign in to your health data" : "Create your account"}
+        </div>
+        <form onSubmit={submit} style={{ display: "grid", gap: 12 }}>
+          <input type="email" required autoComplete="email" placeholder="Email" value={email}
+            onChange={(e) => setEmail(e.target.value)} style={authInputStyle} />
+          <input type="password" required minLength={6} autoComplete={mode === "signin" ? "current-password" : "new-password"}
+            placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} style={authInputStyle} />
+          {error && <div style={{ color: C.coral, font: `400 12px ${FONT_BODY}` }}>{error}</div>}
+          {info && <div style={{ color: C.teal, font: `400 12px ${FONT_BODY}` }}>{info}</div>}
+          <button type="submit" disabled={busy}
+            style={{ appearance: "none", border: "none", cursor: busy ? "default" : "pointer", background: C.teal, color: "#fff",
+              font: `600 14px ${FONT_BODY}`, padding: "11px", borderRadius: 10, opacity: busy ? 0.7 : 1 }}>
+            {busy ? "Please wait…" : mode === "signin" ? "Sign in" : "Create account"}
+          </button>
+        </form>
+        <button onClick={() => { setMode(mode === "signin" ? "signup" : "signin"); setError(""); setInfo(""); }}
+          style={{ appearance: "none", border: "none", background: "none", cursor: "pointer", color: C.teal,
+            font: `500 12px ${FONT_BODY}`, marginTop: 14, padding: 0 }}>
+          {mode === "signin" ? "New here? Create an account" : "Already have an account? Sign in"}
+        </button>
+      </Card>
+    </div>
+  );
+}
+
 function SupabaseSetupNotice() {
   return (
     <Card style={{ borderColor: C.amber, background: "#FCF3E3" }}>
@@ -174,7 +226,22 @@ function Sparkline({ data, color }) {
 // ============================================================
 function Vitae() {
   const [tab, setTab] = useState("Overview");
+  const [session, setSession] = useState(supabase ? undefined : null); // undefined = checking, null = signed out
   const tabs = ["Overview", "Nutrition", "Training", "Protocols", "Bloodwork"];
+
+  useEffect(() => {
+    if (!supabase) return;
+    supabase.auth.getSession().then(({ data }) => setSession(data.session));
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, sess) => setSession(sess));
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  if (supabase && session === undefined) {
+    return <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", background: C.panel, color: C.mute, fontFamily: FONT_BODY }}>Loading…</div>;
+  }
+  if (supabase && !session) {
+    return <AuthScreen />;
+  }
 
   return (
     <div style={{ background: C.panel, minHeight: "100vh", fontFamily: FONT_BODY, color: C.ink }}>
@@ -199,8 +266,17 @@ function Vitae() {
             <span style={{ font: `700 26px/1 ${FONT_DISPLAY}`, letterSpacing: "-0.01em" }}>Vitae</span>
             <span style={{ font: `400 12px/1 ${FONT_MONO}`, color: C.mute }}>{today.date}</span>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, font: `500 12px ${FONT_BODY}`, color: C.teal }}>
-            <Watch size={15} /> Garmin · synced 9m ago
+          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, font: `500 12px ${FONT_BODY}`, color: C.teal }}>
+              <Watch size={15} /> Garmin · synced 9m ago
+            </div>
+            {supabase && session && (
+              <button onClick={() => supabase.auth.signOut()}
+                style={{ appearance: "none", border: `1px solid ${C.line}`, background: C.bg, cursor: "pointer", color: C.mute,
+                  font: `500 12px ${FONT_BODY}`, padding: "6px 12px", borderRadius: 8 }}>
+                Sign out
+              </button>
+            )}
           </div>
         </header>
 
@@ -358,7 +434,6 @@ function Bloodwork() {
 
   const load = useCallback(async () => {
     if (!supabase) { setLoading(false); return; }
-    await ensureSession();
     const { data } = await supabase.from("blood_markers").select("*").order("taken_on");
     setMarkers(data || []);
     setLoading(false);
@@ -802,7 +877,6 @@ function Protocols() {
 
   const load = useCallback(async () => {
     if (!supabase) { setLoading(false); return; }
-    await ensureSession();
     const [{ data: rows }, { data: logs }] = await Promise.all([
       supabase.from("protocols").select("*").order("created_at"),
       supabase.from("protocol_logs").select("protocol_id, taken_on"),
