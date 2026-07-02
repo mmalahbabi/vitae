@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import {
   LineChart, Line, AreaChart, Area, BarChart, Bar,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
@@ -9,6 +9,7 @@ import {
   Syringe, Clock, Pill, Sun, Pencil, Archive, Circle, RotateCcw, Trash2, MoreHorizontal,
   TrendingUp, TrendingDown, Upload, Link2,
 } from "lucide-react";
+import { supabase, ensureSession } from "./lib/supabaseClient";
 
 // ============================================================
 // Vitae — personal health platform prototype
@@ -44,64 +45,48 @@ const weekEnergy = [
   { d: "Sun", in: 0, out: 0 },
 ];
 
-const bloodDates = ["Jan '24", "Apr '24", "Aug '24", "Dec '24", "May '25"];
-const latestPanelDate = "12 May 2025";
-
-// Markers grouped by panel. status derived from value vs range.
-// history aligns to bloodDates; last entry is the latest = value.
-const bloodPanels = [
-  { panel: "Lipids", markers: [
-    { key: "Total cholesterol", value: 214, unit: "mg/dL", low: 0, high: 200, history: [188, 196, 203, 209, 214] },
-    { key: "LDL", value: 138, unit: "mg/dL", low: 0, high: 130, history: [122, 128, 131, 135, 138],
-      note: "Above range and trending up across 5 panels." },
-    { key: "HDL", value: 52, unit: "mg/dL", low: 40, high: 100, history: [48, 49, 50, 51, 52] },
-    { key: "Triglycerides", value: 120, unit: "mg/dL", low: 0, high: 150, history: [98, 105, 110, 116, 120] },
-  ]},
-  { panel: "Metabolic", markers: [
-    { key: "HbA1c", value: 5.4, unit: "%", low: 4, high: 5.6, history: [5.9, 5.8, 5.6, 5.5, 5.4],
-      note: "Steady improvement — now solidly in range." },
-    { key: "Fasting glucose", value: 92, unit: "mg/dL", low: 70, high: 99, history: [101, 98, 95, 93, 92] },
-    { key: "Fasting insulin", value: 7.2, unit: "µIU/mL", low: 2, high: 20, history: [11, 9.5, 8.4, 7.8, 7.2] },
-    { key: "Uric acid", value: 5.8, unit: "mg/dL", low: 3.4, high: 7.0, history: [6.2, 6.0, 5.9, 5.8, 5.8] },
-  ]},
-  { panel: "Thyroid", markers: [
-    { key: "TSH", value: 2.1, unit: "mIU/L", low: 0.4, high: 4.0, history: [2.8, 2.5, 2.4, 2.2, 2.1] },
-    { key: "Free T4", value: 1.3, unit: "ng/dL", low: 0.8, high: 1.8, history: [1.1, 1.2, 1.2, 1.3, 1.3] },
-    { key: "Free T3", value: 3.2, unit: "pg/mL", low: 2.3, high: 4.2, history: [3.0, 3.1, 3.1, 3.2, 3.2] },
-  ]},
-  { panel: "Vitamins & minerals", markers: [
-    { key: "Vitamin D", value: 32, unit: "ng/mL", low: 30, high: 100, history: [18, 22, 25, 29, 32],
-      note: "Climbing since starting D3 — just crossed into range.", protocol: "Vitamin D3 + K2" },
-    { key: "Vitamin B12", value: 540, unit: "pg/mL", low: 200, high: 900, history: [410, 450, 480, 510, 540] },
-    { key: "Ferritin", value: 88, unit: "ng/mL", low: 30, high: 400, history: [64, 70, 75, 82, 88] },
-    { key: "Magnesium", value: 2.0, unit: "mg/dL", low: 1.7, high: 2.4, history: [1.8, 1.9, 1.9, 2.0, 2.0], protocol: "Magnesium glycinate" },
-    { key: "Folate", value: 14, unit: "ng/mL", low: 3, high: 20, history: [9, 11, 12, 13, 14] },
-  ]},
-  { panel: "Inflammation", markers: [
-    { key: "CRP", value: 3.4, unit: "mg/L", low: 0, high: 3.0, history: [1.1, 1.8, 2.2, 2.9, 3.4],
-      note: "Above range and rising — worth discussing with your doctor." },
-    { key: "Homocysteine", value: 9.1, unit: "µmol/L", low: 0, high: 15, history: [10.2, 9.8, 9.5, 9.3, 9.1] },
-  ]},
-  { panel: "Liver & kidney", markers: [
-    { key: "ALT", value: 28, unit: "U/L", low: 0, high: 40, history: [33, 31, 30, 29, 28] },
-    { key: "AST", value: 24, unit: "U/L", low: 0, high: 40, history: [27, 26, 25, 24, 24] },
-    { key: "Creatinine", value: 0.95, unit: "mg/dL", low: 0.7, high: 1.3, history: [0.92, 0.93, 0.94, 0.95, 0.95] },
-    { key: "eGFR", value: 98, unit: "mL/min", low: 90, high: 200, history: [95, 96, 97, 98, 98] },
-  ]},
-  { panel: "Hormones", markers: [
-    { key: "Total testosterone", value: 610, unit: "ng/dL", low: 300, high: 1000, history: [520, 545, 570, 590, 610],
-      protocol: "Ipamorelin" },
-    { key: "IGF-1", value: 180, unit: "ng/mL", low: 90, high: 250, history: [150, 158, 166, 173, 180], protocol: "Ipamorelin" },
-  ]},
-];
+const BLOOD_PANEL_NAMES = ["Lipids", "Metabolic", "Thyroid", "Vitamins & minerals", "Inflammation", "Liver & kidney", "Hormones"];
 
 function markerStatus(m) {
   if (m.value > m.high) return "high";
   if (m.value < m.low) return "low";
   return "ok";
 }
-// Flat list for any code that wants every marker
-const bloodMarkers = bloodPanels.flatMap((p) => p.markers.map((m) => ({ ...m, panel: p.panel, status: markerStatus(m) })));
+
+function fmtLongDate(iso) {
+  return new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+}
+function fmtShortDate(iso) {
+  const d = new Date(iso);
+  return d.toLocaleDateString("en-US", { month: "short" }) + " '" + String(d.getFullYear()).slice(-2);
+}
+
+// Groups flat blood_markers rows (one row per marker per dated panel) into
+// the { panel, markers: [{ key, value, history }] } shape the UI renders.
+function groupMarkers(rows) {
+  const byKey = new Map();
+  for (const r of rows) {
+    if (!byKey.has(r.marker_key)) byKey.set(r.marker_key, { panel: r.panel, rows: [] });
+    byKey.get(r.marker_key).rows.push(r);
+  }
+  const panelsMap = new Map();
+  for (const [key, g] of byKey) {
+    g.rows.sort((a, b) => a.taken_on.localeCompare(b.taken_on));
+    const latest = g.rows[g.rows.length - 1];
+    const marker = {
+      id: latest.id, key, value: Number(latest.value), unit: latest.unit,
+      low: Number(latest.range_low), high: latest.range_high == null ? Infinity : Number(latest.range_high),
+      note: latest.note || undefined, protocol: latest.protocol_link || undefined,
+      history: g.rows.map((r) => ({ date: r.taken_on, value: Number(r.value) })),
+    };
+    if (!panelsMap.has(g.panel)) panelsMap.set(g.panel, { panel: g.panel, markers: [] });
+    panelsMap.get(g.panel).markers.push(marker);
+  }
+  return [...panelsMap.values()].sort((a, b) => {
+    const ia = BLOOD_PANEL_NAMES.indexOf(a.panel), ib = BLOOD_PANEL_NAMES.indexOf(b.panel);
+    return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+  });
+}
 
 const meals = [
   { name: "Greek yogurt & berries", kcal: 240, conf: 0.94, time: "08:10", p: 18, c: 28, f: 6 },
@@ -122,38 +107,14 @@ const hrZones = [
 
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-// Protocols — peptides (insulin-pen, Luminate house style) and supplements
-// slot: "AM" | "PM" · log: array of ISO date strings when a dose was checked off
-const initialProtocols = [
-  { id: 1, type: "peptide", name: "BPC-157", dose: 250, unit: "mcg", time: "08:00", slot: "AM", days: ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"],
-    purpose: "Recovery / gut", durationDays: 28, startedDay: 6, color: "#0E6E66", taken: true,
-    log: ["2026-06-22","2026-06-23","2026-06-24","2026-06-25","2026-06-26","2026-06-27"] },
-  { id: 2, type: "peptide", name: "TB-500", dose: 2.5, unit: "mg", time: "08:00", slot: "AM", days: ["Mon","Thu"],
-    purpose: "Tissue repair", durationDays: 42, startedDay: 12, color: "#3B9BD0", taken: false,
-    log: ["2026-06-22","2026-06-25"] },
-  { id: 3, type: "peptide", name: "Ipamorelin", dose: 300, unit: "mcg", time: "22:30", slot: "PM", days: ["Mon","Tue","Wed","Thu","Fri"],
-    purpose: "GH support / sleep", durationDays: 56, startedDay: 20, color: "#8C6BD0", taken: false,
-    log: ["2026-06-22","2026-06-23","2026-06-24","2026-06-25","2026-06-26"] },
-  { id: 4, type: "supplement", name: "Multivitamin", dose: 1, unit: "tab", time: "08:00", slot: "AM", days: ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"],
-    purpose: "Daily baseline", durationDays: 30, startedDay: 4, color: "#2E9E6B", taken: true,
-    log: ["2026-06-24","2026-06-25","2026-06-26","2026-06-27"] },
-  { id: 5, type: "supplement", name: "Vitamin D3 + K2", dose: 5000, unit: "IU", time: "08:00", slot: "AM", days: ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"],
-    purpose: "Low D — flagged in bloodwork", durationDays: 90, startedDay: 10, color: "#D89A2B", taken: false,
-    log: ["2026-06-20","2026-06-21","2026-06-22","2026-06-23","2026-06-24","2026-06-25","2026-06-26"] },
-  { id: 6, type: "supplement", name: "Magnesium glycinate", dose: 400, unit: "mg", time: "22:30", slot: "PM", days: ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"],
-    purpose: "Sleep / recovery", durationDays: 30, startedDay: 2, color: "#8C6BD0", taken: false,
-    log: ["2026-06-25","2026-06-26"] },
-];
-
-// Completed protocols — kept as a dated historical record
-const initialArchive = [
-  { id: 101, type: "peptide", name: "CJC-1295", dose: 100, unit: "mcg", time: "22:30", slot: "PM",
-    purpose: "GH support", durationDays: 28, startDate: "2026-04-01", endDate: "2026-04-28",
-    dosesLogged: 12, dosesPlanned: 12, color: "#D89A2B" },
-  { id: 102, type: "supplement", name: "Zinc", dose: 30, unit: "mg", time: "08:00", slot: "AM",
-    purpose: "Immune support", durationDays: 60, startDate: "2026-02-15", endDate: "2026-04-15",
-    dosesLogged: 54, dosesPlanned: 60, color: "#2E9E6B" },
-];
+// Converts a Supabase protocols row (+ its dose log) into the shape the UI renders.
+function shapeProtocol(r, log) {
+  return {
+    id: r.id, type: r.type, name: r.name, dose: Number(r.dose), unit: r.unit, time: r.time,
+    slot: r.slot, days: r.days, purpose: r.purpose || "—", durationDays: r.duration_days,
+    startDate: r.start_date, endDate: r.end_date, color: r.color, status: r.status, log,
+  };
+}
 
 // ---------- small ui helpers ----------
 function Ring({ value, target, color, size = 92, stroke = 9, children }) {
@@ -185,6 +146,22 @@ function Card({ children, style }) {
     padding: 20, ...style }}>{children}</div>;
 }
 
+function SupabaseSetupNotice() {
+  return (
+    <Card style={{ borderColor: C.amber, background: "#FCF3E3" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <AlertCircle size={16} color={C.amber} />
+        <Eyebrow>Not connected to Supabase</Eyebrow>
+      </div>
+      <div style={{ font: `400 13px ${FONT_BODY}`, color: C.ink, marginTop: 8, lineHeight: 1.5 }}>
+        Add <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_ANON_KEY</code> to a <code>.env.local</code> file
+        (see <code>.env.example</code>), run the migration in <code>supabase/migrations/0001_init.sql</code>,
+        and restart the dev server to save real data here.
+      </div>
+    </Card>
+  );
+}
+
 function Sparkline({ data, color }) {
   const pts = data.map((v, i) => ({ i, v }));
   return (
@@ -197,8 +174,6 @@ function Sparkline({ data, color }) {
 // ============================================================
 function Vitae() {
   const [tab, setTab] = useState("Overview");
-  const [protocols, setProtocols] = useState(initialProtocols);
-  const [archive, setArchive] = useState(initialArchive);
   const tabs = ["Overview", "Nutrition", "Training", "Protocols", "Bloodwork"];
 
   return (
@@ -247,7 +222,7 @@ function Vitae() {
           {tab === "Bloodwork" && <Bloodwork />}
           {tab === "Nutrition" && <Nutrition />}
           {tab === "Training" && <Training />}
-          {tab === "Protocols" && <Protocols protocols={protocols} setProtocols={setProtocols} archive={archive} setArchive={setArchive} />}
+          {tab === "Protocols" && <Protocols />}
         </main>
       </div>
     </div>
@@ -370,19 +345,32 @@ function Overview() {
 
 // ---------- BLOODWORK ----------
 function Bloodwork() {
-  const [panels, setPanels] = useState(bloodPanels);
-  const [expanded, setExpanded] = useState("LDL"); // marker key whose graph is open
+  const [markers, setMarkers] = useState([]); // flat rows straight from Supabase
+  const [loading, setLoading] = useState(true);
+  const [expanded, setExpanded] = useState(null); // marker key whose graph is open
   const [scan, setScan] = useState({ status: "idle", count: 0 }); // idle | reading | done
   const [showForm, setShowForm] = useState(false);
   const [editKey, setEditKey] = useState(null);
   const fileRef = React.useRef(null);
 
-  const PANEL_NAMES = bloodPanels.map((p) => p.panel);
-  const blank = { key: "", value: "", unit: "", low: "", high: "", panel: PANEL_NAMES[0] };
+  const blank = { key: "", value: "", unit: "", low: "", high: "", panel: BLOOD_PANEL_NAMES[0] };
   const [draft, setDraft] = useState(blank);
 
+  const load = useCallback(async () => {
+    if (!supabase) { setLoading(false); return; }
+    await ensureSession();
+    const { data } = await supabase.from("blood_markers").select("*").order("taken_on");
+    setMarkers(data || []);
+    setLoading(false);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const panels = useMemo(() => groupMarkers(markers), [markers]);
   const allMarkers = panels.flatMap((p) => p.markers.map((m) => ({ ...m, panel: p.panel, status: markerStatus(m) })));
   const flagged = allMarkers.filter((m) => m.status !== "ok");
+  const latestPanelDate = markers.length
+    ? fmtLongDate(markers.reduce((max, m) => (m.taken_on > max ? m.taken_on : max), markers[0].taken_on))
+    : "No panels yet";
 
   // Simulated lab extraction — production posts the PDF/photo to an OCR + parser
   function onPickLab(e) {
@@ -395,24 +383,30 @@ function Bloodwork() {
   function openAdd() { setEditKey(null); setDraft(blank); setShowForm(true); }
   function openEdit(m) {
     setEditKey(m.key);
-    setDraft({ key: m.key, value: String(m.value), unit: m.unit, low: String(m.low), high: String(m.high), panel: m.panel });
+    setDraft({ key: m.key, value: String(m.value), unit: m.unit, low: String(m.low), high: m.high === Infinity ? "" : String(m.high), panel: m.panel });
     setShowForm(true);
   }
   function closeForm() { setShowForm(false); setEditKey(null); setDraft(blank); }
 
-  function saveMarker() {
-    if (!draft.key || draft.value === "" || !draft.unit) return;
+  async function saveMarker() {
+    if (!draft.key || draft.value === "" || !draft.unit || !supabase) return;
     const val = parseFloat(draft.value);
     const low = draft.low === "" ? 0 : parseFloat(draft.low);
-    const high = draft.high === "" ? Infinity : parseFloat(draft.high);
-    setPanels((ps) => {
-      // remove existing entry with this key (in case panel changed or editing)
-      const cleaned = ps.map((p) => ({ ...p, markers: p.markers.filter((m) => m.key !== (editKey || draft.key)) }));
-      return cleaned.map((p) => p.panel === draft.panel
-        ? { ...p, markers: [...p.markers, { key: draft.key, value: val, unit: draft.unit, low, high,
-            history: (editKey ? (ps.flatMap((x) => x.markers).find((m) => m.key === editKey)?.history.slice(0, -1) || []) : []).concat(val) }] }
-        : p);
-    });
+    const high = draft.high === "" ? null : parseFloat(draft.high);
+    if (editKey) {
+      const current = allMarkers.find((m) => m.key === editKey);
+      if (current?.id) {
+        await supabase.from("blood_markers").update({
+          panel: draft.panel, marker_key: draft.key, value: val, unit: draft.unit, range_low: low, range_high: high,
+        }).eq("id", current.id);
+      }
+    } else {
+      await supabase.from("blood_markers").insert({
+        panel: draft.panel, marker_key: draft.key, value: val, unit: draft.unit, range_low: low, range_high: high,
+        taken_on: new Date().toISOString().slice(0, 10),
+      });
+    }
+    await load();
     setExpanded(draft.key);
     closeForm();
   }
@@ -422,9 +416,9 @@ function Bloodwork() {
 
   function TrendGraph({ m }) {
     const status = markerStatus(m);
-    const data = m.history.map((v, i) => ({ date: bloodDates[i], v }));
+    const data = m.history.map((h) => ({ date: fmtShortDate(h.date), v: h.value }));
     const stroke = status === "ok" ? C.teal : C.coral;
-    const first = m.history[0], last = m.history[m.history.length - 1];
+    const first = m.history[0].value, last = m.history[m.history.length - 1].value;
     const delta = last - first;
     const dir = delta > 0 ? "up" : delta < 0 ? "down" : "flat";
     return (
@@ -479,6 +473,8 @@ function Bloodwork() {
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
+      {!supabase && <SupabaseSetupNotice />}
+
       {/* Header: latest panel + actions */}
       <Card style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
         <div>
@@ -567,7 +563,7 @@ function Bloodwork() {
             <div>
               <label style={{ font: `500 11px ${FONT_MONO}`, color: C.mute, display: "block", marginBottom: 5 }}>PANEL</label>
               <select style={inputStyle} value={draft.panel} onChange={(e) => setDraft({ ...draft, panel: e.target.value })}>
-                {PANEL_NAMES.map((n) => <option key={n} value={n}>{n}</option>)}
+                {BLOOD_PANEL_NAMES.map((n) => <option key={n} value={n}>{n}</option>)}
               </select>
             </div>
           </div>
@@ -596,6 +592,12 @@ function Bloodwork() {
               </button>
             ))}
           </div>
+        </Card>
+      )}
+
+      {supabase && !loading && panels.length === 0 && (
+        <Card style={{ textAlign: "center", color: C.mute, font: `400 13px ${FONT_BODY}` }}>
+          No blood markers yet — add one above to start your timeline.
         </Card>
       )}
 
@@ -782,10 +784,13 @@ function Training() {
 }
 
 // ---------- PROTOCOLS ----------
-function Protocols({ protocols, setProtocols, archive, setArchive }) {
-  const todayIdx = 5; // Saturday, matches today.date
+function Protocols() {
+  const now = new Date();
+  const todayIdx = (now.getDay() + 6) % 7; // Mon=0..Sun=6, matching DAYS
   const todayName = DAYS[todayIdx];
-  const TODAY_ISO = "2026-06-27";
+  const TODAY_ISO = now.toISOString().slice(0, 10);
+  const [protocols, setProtocols] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null); // null = adding; number = editing that protocol
   const [view, setView] = useState("active"); // active | archive
@@ -794,6 +799,23 @@ function Protocols({ protocols, setProtocols, archive, setArchive }) {
   const [draft, setDraft] = useState(blank);
   const [scan, setScan] = useState({ status: "idle", preview: null, detectedType: null });
   const fileRef = React.useRef(null);
+
+  const load = useCallback(async () => {
+    if (!supabase) { setLoading(false); return; }
+    await ensureSession();
+    const [{ data: rows }, { data: logs }] = await Promise.all([
+      supabase.from("protocols").select("*").order("created_at"),
+      supabase.from("protocol_logs").select("protocol_id, taken_on"),
+    ]);
+    const logMap = {};
+    for (const l of logs || []) (logMap[l.protocol_id] ||= []).push(l.taken_on);
+    setProtocols((rows || []).map((r) => shapeProtocol(r, logMap[r.id] || [])));
+    setLoading(false);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const active = protocols.filter((p) => p.status !== "archived");
+  const archive = protocols.filter((p) => p.status === "archived");
 
   const SAMPLE_READS = [
     { type: "peptide", name: "BPC-157", dose: 250, unit: "mcg", purpose: "Recovery / gut", durationDays: 28, slot: "AM" },
@@ -819,19 +841,18 @@ function Protocols({ protocols, setProtocols, archive, setArchive }) {
     }, 1600);
   }
 
-  const active = protocols;
   const slots = { AM: active.filter((p) => p.slot === "AM"), PM: active.filter((p) => p.slot === "PM") };
   const todayDoses = active.filter((p) => p.days.includes(todayName));
   const takenCount = todayDoses.filter((p) => (p.log || []).includes(TODAY_ISO)).length;
 
   // Mark / unmark today's dose on a protocol; keeps a dated log for adherence
-  function toggleToday(id) {
-    setProtocols((ps) => ps.map((p) => {
-      if (p.id !== id) return p;
-      const log = p.log || [];
-      const has = log.includes(TODAY_ISO);
-      return { ...p, taken: !has, log: has ? log.filter((d) => d !== TODAY_ISO) : [...log, TODAY_ISO] };
-    }));
+  async function toggleToday(id) {
+    if (!supabase) return;
+    const p = protocols.find((x) => x.id === id);
+    const has = (p?.log || []).includes(TODAY_ISO);
+    if (has) await supabase.from("protocol_logs").delete().eq("protocol_id", id).eq("taken_on", TODAY_ISO);
+    else await supabase.from("protocol_logs").insert({ protocol_id: id, taken_on: TODAY_ISO });
+    await load();
   }
 
   function toggleDraftDay(d) {
@@ -848,65 +869,57 @@ function Protocols({ protocols, setProtocols, archive, setArchive }) {
   }
   function closeForm() { setShowForm(false); setEditingId(null); setDraft(blank); setScan({ status: "idle", preview: null, detectedType: null }); }
 
-  function save() {
-    if (!draft.name || !draft.dose || draft.days.length === 0) return;
+  async function save() {
+    if (!draft.name || !draft.dose || draft.days.length === 0 || !supabase) return;
     const peptidePalette = ["#0E6E66", "#3B9BD0", "#8C6BD0", "#D89A2B", "#E8674C"];
     const supplementPalette = ["#2E9E6B", "#D89A2B", "#8C6BD0", "#3B9BD0", "#E8674C"];
     const palette = draft.type === "supplement" ? supplementPalette : peptidePalette;
+    const patch = {
+      type: draft.type, name: draft.name, dose: parseFloat(draft.dose), unit: draft.unit,
+      time: draft.time, slot: draft.slot, days: draft.days, purpose: draft.purpose || "—",
+      duration_days: draft.durationDays ? parseInt(draft.durationDays, 10) : null,
+    };
     if (editingId != null) {
-      setProtocols((ps) => ps.map((p) => p.id === editingId ? {
-        ...p, type: draft.type, name: draft.name, dose: parseFloat(draft.dose), unit: draft.unit,
-        time: draft.time, slot: draft.slot, days: draft.days, purpose: draft.purpose || "—",
-        durationDays: draft.durationDays ? parseInt(draft.durationDays, 10) : null,
-      } : p));
+      await supabase.from("protocols").update(patch).eq("id", editingId);
     } else {
-      setProtocols((ps) => [...ps, {
-        id: Date.now(), type: draft.type, name: draft.name, dose: parseFloat(draft.dose), unit: draft.unit,
-        time: draft.time, slot: draft.slot, days: draft.days, purpose: draft.purpose || "—",
-        durationDays: draft.durationDays ? parseInt(draft.durationDays, 10) : null, startedDay: todayIdx,
-        color: palette[ps.length % palette.length], taken: false, log: [],
-      }]);
+      await supabase.from("protocols").insert({
+        ...patch, start_date: TODAY_ISO, color: palette[protocols.length % palette.length], status: "active",
+      });
     }
+    await load();
     closeForm();
   }
 
   // Move an active protocol into the dated archive
-  function completeProtocol(id) {
-    const p = protocols.find((x) => x.id === id);
-    if (!p) return;
-    const elapsed = p.startedDay != null ? p.startedDay : (p.log || []).length;
-    const start = new Date(TODAY_ISO); start.setDate(start.getDate() - elapsed);
-    const dosesPlanned = p.durationDays ? Math.round((p.durationDays / 7) * p.days.length) : (p.log || []).length;
-    setArchive((ar) => [{
-      id: p.id, type: p.type, name: p.name, dose: p.dose, unit: p.unit, time: p.time, slot: p.slot,
-      purpose: p.purpose, durationDays: p.durationDays,
-      startDate: start.toISOString().slice(0, 10), endDate: TODAY_ISO,
-      dosesLogged: (p.log || []).length, dosesPlanned: Math.max(dosesPlanned, (p.log || []).length), color: p.color,
-    }, ...ar]);
-    setProtocols((ps) => ps.filter((x) => x.id !== id));
+  async function completeProtocol(id) {
+    if (!supabase) return;
+    await supabase.from("protocols").update({ status: "archived", end_date: TODAY_ISO }).eq("id", id);
+    await load();
   }
 
   // Restart an archived protocol back into the active list
-  function restartFromArchive(a) {
-    setProtocols((ps) => [...ps, {
-      id: Date.now(), type: a.type, name: a.name, dose: a.dose, unit: a.unit, time: a.time, slot: a.slot || "AM",
+  async function restartFromArchive(a) {
+    if (!supabase) return;
+    await supabase.from("protocols").insert({
+      type: a.type, name: a.name, dose: a.dose, unit: a.unit, time: a.time, slot: a.slot || "AM",
       days: ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"], purpose: a.purpose,
-      durationDays: a.durationDays, startedDay: 0, color: a.color, taken: false, log: [],
-    }]);
+      duration_days: a.durationDays, start_date: TODAY_ISO, color: a.color, status: "active",
+    });
+    await load();
     setView("active");
   }
-  function deleteArchived(id) { setArchive((ar) => ar.filter((a) => a.id !== id)); }
+  async function deleteArchived(id) {
+    if (!supabase) return;
+    await supabase.from("protocols").delete().eq("id", id);
+    await load();
+  }
 
   const inputStyle = { font: `400 14px ${FONT_BODY}`, padding: "10px 12px",
     border: `1px solid ${C.line}`, borderRadius: 10, background: C.bg, color: C.ink, width: "100%", boxSizing: "border-box" };
 
-  function fmtDate(iso) {
-    const d = new Date(iso);
-    return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
-  }
-
   return (
     <div style={{ display: "grid", gap: 16 }}>
+      {!supabase && <SupabaseSetupNotice />}
       {/* View switch */}
       <div style={{ display: "flex", gap: 4, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 12, padding: 4, width: "fit-content" }}>
         {[["active", "Active"], ["archive", `Archive · ${archive.length}`]].map(([v, label]) => (
@@ -1181,12 +1194,19 @@ function Protocols({ protocols, setProtocols, archive, setArchive }) {
             </div>
           </Card>
 
+          {supabase && !loading && active.length === 0 && (
+            <Card style={{ textAlign: "center", color: C.mute, font: `400 13px ${FONT_BODY}` }}>
+              No active protocols yet — add one above to start tracking.
+            </Card>
+          )}
+
           {/* Protocol cards — daily check, edit, complete */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
-            {protocols.map((p) => {
+            {active.map((p) => {
               const done = (p.log || []).includes(TODAY_ISO);
               const scheduledToday = p.days.includes(todayName);
-              const elapsed = Math.max(0, Math.min(p.durationDays || 0, p.startedDay != null ? p.startedDay : 0));
+              const elapsedRaw = p.startDate ? Math.floor((new Date(TODAY_ISO) - new Date(p.startDate)) / 86400000) : 0;
+              const elapsed = Math.max(0, p.durationDays ? Math.min(elapsedRaw, p.durationDays) : elapsedRaw);
               const pct = p.durationDays ? Math.min(100, Math.round((elapsed / p.durationDays) * 100)) : 0;
               const remaining = p.durationDays ? Math.max(0, p.durationDays - elapsed) : null;
               const adherence = p.durationDays ? Math.round(((p.log || []).length / Math.max(1, Math.round((elapsed / 7) * p.days.length || (p.log || []).length))) * 100) : null;
@@ -1338,11 +1358,17 @@ function Protocols({ protocols, setProtocols, archive, setArchive }) {
                     </div>
                     <div>
                       <div style={{ font: `400 9px ${FONT_MONO}`, color: C.mute, textTransform: "uppercase", letterSpacing: "0.08em" }}>Dates taken</div>
-                      <div style={{ font: `600 13px ${FONT_BODY}`, marginTop: 2 }}>{fmtDate(a.startDate)} – {fmtDate(a.endDate)}</div>
+                      <div style={{ font: `600 13px ${FONT_BODY}`, marginTop: 2 }}>{fmtLongDate(a.startDate)} – {fmtLongDate(a.endDate)}</div>
                     </div>
                     <div>
                       <div style={{ font: `400 9px ${FONT_MONO}`, color: C.mute, textTransform: "uppercase", letterSpacing: "0.08em" }}>Adherence</div>
-                      <div style={{ font: `600 14px ${FONT_BODY}`, marginTop: 2, color: a.color }}>{a.dosesLogged}/{a.dosesPlanned} doses</div>
+                      <div style={{ font: `600 14px ${FONT_BODY}`, marginTop: 2, color: a.color }}>
+                        {(() => {
+                          const dosesLogged = (a.log || []).length;
+                          const dosesPlanned = a.durationDays ? Math.round((a.durationDays / 7) * (a.days ? a.days.length : 7)) : dosesLogged;
+                          return `${dosesLogged}/${Math.max(dosesPlanned, dosesLogged)} doses`;
+                        })()}
+                      </div>
                     </div>
                   </div>
                 </div>
