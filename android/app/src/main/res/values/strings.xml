@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Vitae</string>
+    <string name="title_activity_main">Vitae</string>
+    <string name="package_name">com.mmalahbabi.vitae</string>
+    <string name="custom_url_scheme">com.mmalahbabi.vitae</string>
+</resources>
