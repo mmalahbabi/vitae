@@ -475,11 +475,13 @@ function Bloodwork() {
         panel: m.panel, marker_key: m.key, value: m.value, unit: m.unit,
         range_low: m.low ?? 0, range_high: m.high ?? null, taken_on: takenOn,
       }));
-      if (rows.length > 0) {
-        const { error: upsertError } = await supabase.from("blood_markers")
-          .upsert(rows, { onConflict: "user_id,marker_key,taken_on" });
-        if (upsertError) throw upsertError;
+      if (rows.length === 0) {
+        throw new Error("Vitae couldn't find any markers in that file. It may be a scanned image that's too " +
+          "blurry to read, or not a lab report at all — try a clearer photo of the printed page, or a text-based PDF export.");
       }
+      const { error: upsertError } = await supabase.from("blood_markers")
+        .upsert(rows, { onConflict: "user_id,marker_key,taken_on" });
+      if (upsertError) throw upsertError;
       await load();
       setScan({ status: "done", count: rows.length, error: null });
     } catch (err) {

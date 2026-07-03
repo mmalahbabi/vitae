@@ -33,7 +33,12 @@ Deno.serve(async (req) => {
     return json({ error: "Expected JSON body with a base64 'file' field" }, 400);
   }
 
-  const isPdf = mediaType === "application/pdf";
+  // Trust the file's own magic bytes over the browser-reported MIME type —
+  // some browsers report a blank or generic type for local PDF picks, which
+  // would otherwise send the PDF bytes to the API mislabeled as a JPEG and
+  // have Claude silently fail to read anything from it. "%PDF-" in base64
+  // always starts with "JVBER".
+  const isPdf = mediaType === "application/pdf" || file.startsWith("JVBER");
   const fileBlock = isPdf
     ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: file } }
     : { type: "image", source: { type: "base64", media_type: mediaType, data: file } };
@@ -47,20 +52,24 @@ Deno.serve(async (req) => {
     },
     body: JSON.stringify({
       model: "claude-sonnet-5",
-      max_tokens: 4096,
+      max_tokens: 8192,
       messages: [{
         role: "user",
         content: [
           fileBlock,
           {
             type: "text",
-            text: "You are reading a blood lab report. Extract every marker you can find. For each, group it " +
-              `into one of these panels if it fits: ${KNOWN_PANELS.join(", ")}. If a marker doesn't fit any of ` +
+            text: "You are reading a blood lab report, which may be a multi-page PDF or a photo of a printed " +
+              "report. Check every page. Extract every marker you can find, including ones on later pages or in " +
+              "smaller supplementary panels — do not stop after the first page or the first panel. For each, group " +
+              `it into one of these panels if it fits: ${KNOWN_PANELS.join(", ")}. If a marker doesn't fit any of ` +
               "those, invent a short, sensible panel name for it. For each marker capture: the marker's common " +
               "name, its numeric value, its unit, the reference range low and high as printed (use 0 for low if " +
               "no floor is given, and null for high if no ceiling is given), and the date the panel was drawn if " +
-              "printed on the report (YYYY-MM-DD; use null if not found — the caller will default to today). " +
-              "Respond with ONLY a compact JSON object, no markdown, in exactly this shape: " +
+              "printed on the report (YYYY-MM-DD; use null if not found — the caller will default to today). If " +
+              "the image or PDF is too unclear to read any markers at all, still respond with the JSON shape below " +
+              "using an empty markers array — never respond with prose or an apology. Respond with ONLY a compact " +
+              "JSON object, no markdown, in exactly this shape: " +
               '{"takenOn":"2026-05-12","markers":[{"panel":"Lipids","key":"LDL","value":138,"unit":"mg/dL","low":0,"high":130}]}',
           },
         ],
