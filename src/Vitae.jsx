@@ -244,7 +244,8 @@ function Vitae() {
   }
 
   return (
-    <div style={{ background: C.panel, minHeight: "100vh", fontFamily: FONT_BODY, color: C.ink }}>
+    <div style={{ background: C.panel, minHeight: "100vh", fontFamily: FONT_BODY, color: C.ink,
+      paddingTop: "env(safe-area-inset-top)", paddingBottom: "env(safe-area-inset-bottom)" }}>
       <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet" />
       <style>{`
         @media (max-width: 760px) {
