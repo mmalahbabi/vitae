@@ -24,15 +24,17 @@ const C = {
   coral: "#E8674C",      // nutrition / energy layer
   coralSoft: "#FCEBE6",
   amber: "#D89A2B",      // caution / attention
+  coralText: "#C14B2E",  // coral darkened to pass WCAG AA at small sizes
+  amberText: "#8A6116",  // amber darkened to pass WCAG AA at small sizes
   line: "#E7ECEB",       // hairlines
-  mute: "#6B807D",       // secondary text
+  mute: "#5F7370",       // secondary text
   bg: "#FFFFFF",
   panel: "#FBFCFC",
 };
 
-const FONT_DISPLAY = "'Fraunces', Georgia, serif";
-const FONT_BODY = "'Inter', system-ui, sans-serif";
-const FONT_MONO = "'IBM Plex Mono', ui-monospace, monospace";
+const FONT_DISPLAY = "'Geist', system-ui, sans-serif";
+const FONT_BODY = "'Geist', system-ui, sans-serif";
+const FONT_MONO = "'Geist Mono', ui-monospace, monospace";
 
 // ---------- simulated data ----------
 const today = { date: "Sat 27 Jun", caloriesIn: 1840, caloriesTarget: 2200, caloriesOut: 2640,
@@ -97,7 +99,7 @@ const meals = [
 
 const workouts = [
   { type: "Running", dur: "42 min", dist: "7.1 km", kcal: 540, hr: 152, when: "Today · 06:30", icon: Footprints },
-  { type: "Strength", dur: "55 min", dist: "—", kcal: 310, hr: 118, when: "Yesterday", icon: Activity },
+  { type: "Strength", dur: "55 min", dist: "-", kcal: 310, hr: 118, when: "Yesterday", icon: Activity },
   { type: "Cycling", dur: "1h 18m", dist: "31 km", kcal: 720, hr: 138, when: "Thu", icon: Activity },
 ];
 
@@ -111,7 +113,7 @@ const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 function shapeProtocol(r, log) {
   return {
     id: r.id, type: r.type, name: r.name, dose: Number(r.dose), unit: r.unit, time: r.time,
-    slot: r.slot, days: r.days, purpose: r.purpose || "—", durationDays: r.duration_days,
+    slot: r.slot, days: r.days, purpose: r.purpose && r.purpose !== "—" ? r.purpose : "", durationDays: r.duration_days,
     startDate: r.start_date, endDate: r.end_date, color: r.color, status: r.status, log,
   };
 }
@@ -180,7 +182,7 @@ function AuthScreen() {
             onChange={(e) => setEmail(e.target.value)} style={authInputStyle} />
           <input type="password" required minLength={6} autoComplete={mode === "signin" ? "current-password" : "new-password"}
             placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} style={authInputStyle} />
-          {error && <div style={{ color: C.coral, font: `400 12px ${FONT_BODY}` }}>{error}</div>}
+          {error && <div style={{ color: C.coralText, font: `400 12px ${FONT_BODY}` }}>{error}</div>}
           {info && <div style={{ color: C.teal, font: `400 12px ${FONT_BODY}` }}>{info}</div>}
           <button type="submit" disabled={busy}
             style={{ appearance: "none", border: "none", cursor: busy ? "default" : "pointer", background: C.teal, color: "#fff",
@@ -246,7 +248,6 @@ function Vitae() {
   return (
     <div style={{ background: C.panel, minHeight: "100vh", fontFamily: FONT_BODY, color: C.ink,
       paddingTop: "env(safe-area-inset-top)", paddingBottom: "env(safe-area-inset-bottom)" }}>
-      <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet" />
       <style>{`
         @media (max-width: 760px) {
           .ov-split, .bw-split, .nut-split, .tr-split { grid-template-columns: 1fr !important; }
@@ -523,13 +524,13 @@ function Bloodwork() {
       <div style={{ marginTop: 12, paddingTop: 14, borderTop: `1px solid ${C.line}` }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, font: `400 11px ${FONT_MONO}`, color: C.mute }}>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 4, color: stroke }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4, color: status === "ok" ? C.teal : C.coralText }}>
               {dir === "up" ? <TrendingUp size={13} /> : dir === "down" ? <TrendingDown size={13} /> : null}
               {dir !== "flat" ? `${delta > 0 ? "+" : ""}${Math.round(delta * 100) / 100} ${m.unit} over ${m.history.length} panels` : "stable"}
             </span>
           </div>
           <div style={{ font: `400 11px ${FONT_MONO}`, color: C.mute }}>
-            range <span style={{ color: C.ink }}>{m.low}–{m.high === Infinity ? "∞" : m.high}</span>
+            range <span style={{ color: C.ink }}>{m.low}-{m.high === Infinity ? "∞" : m.high}</span>
           </div>
         </div>
         <ResponsiveContainer width="100%" height={180}>
@@ -577,7 +578,7 @@ function Bloodwork() {
       <Card style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
         <div>
           <Eyebrow>Latest panel</Eyebrow>
-          <div style={{ font: `700 20px ${FONT_DISPLAY}`, marginTop: 4 }}>{latestPanelDate}</div>
+          <div style={{ font: `700 20px ${FONT_DISPLAY}`, marginTop: 4 }}>{loading ? "Loading…" : latestPanelDate}</div>
           <div style={{ font: `400 12px ${FONT_MONO}`, color: C.mute }}>
             {allMarkers.length} markers · {flagged.length} out of range
           </div>
@@ -614,7 +615,7 @@ function Bloodwork() {
             <>
               <AlertCircle size={20} color={C.coral} />
               <div style={{ flex: 1 }}>
-                <div style={{ font: `600 14px ${FONT_BODY}`, color: C.coral }}>Couldn't read that lab report</div>
+                <div style={{ font: `600 14px ${FONT_BODY}`, color: C.coralText }}>Couldn't read that lab report</div>
                 <div style={{ font: `400 12px ${FONT_BODY}`, color: C.ink }}>{scan.error}</div>
               </div>
               <button onClick={() => setScan({ status: "idle", count: 0, error: null })}
@@ -625,7 +626,7 @@ function Bloodwork() {
             <>
               <Check size={20} color={C.teal} />
               <div style={{ flex: 1 }}>
-                <div style={{ font: `600 14px ${FONT_BODY}`, color: C.teal }}>Lab parsed — {scan.count} markers found</div>
+                <div style={{ font: `600 14px ${FONT_BODY}`, color: C.teal }}>Lab parsed: {scan.count} markers found</div>
                 <div style={{ font: `400 12px ${FONT_BODY}`, color: C.mute }}>
                   Each value appended to its timeline as a new dated panel. Review below.
                 </div>
@@ -698,7 +699,7 @@ function Bloodwork() {
                 style={{ appearance: "none", cursor: "pointer", border: `1px solid ${C.coral}`, background: C.bg,
                   borderRadius: 10, padding: "8px 12px", display: "flex", alignItems: "center", gap: 8 }}>
                 <span style={{ font: `600 13px ${FONT_BODY}`, color: C.ink }}>{m.key}</span>
-                <span style={{ font: `600 13px ${FONT_DISPLAY}`, color: C.coral }}>{m.value}{m.value > m.high ? " ↑" : " ↓"}</span>
+                <span style={{ font: `600 13px ${FONT_DISPLAY}`, color: C.coralText }}>{m.value}{m.value > m.high ? " ↑" : " ↓"}</span>
               </button>
             ))}
           </div>
@@ -707,7 +708,7 @@ function Bloodwork() {
 
       {supabase && !loading && panels.length === 0 && (
         <Card style={{ textAlign: "center", color: C.mute, font: `400 13px ${FONT_BODY}` }}>
-          No blood markers yet — add one above to start your timeline.
+          No blood markers yet. Add one above to start your timeline.
         </Card>
       )}
 
@@ -727,7 +728,7 @@ function Bloodwork() {
                       display: "flex", alignItems: "center", gap: 12, padding: "13px 2px", textAlign: "left" }}>
                     <span style={{ width: 8, height: 8, borderRadius: 99, background: flag ? C.coral : C.teal, flexShrink: 0 }} />
                     <span style={{ flex: 1, font: `600 14px ${FONT_BODY}`, color: C.ink }}>{m.key}</span>
-                    <span style={{ font: `700 16px ${FONT_DISPLAY}`, color: flag ? C.coral : C.ink }}>
+                    <span style={{ font: `700 16px ${FONT_DISPLAY}`, color: flag ? C.coralText : C.ink }}>
                       {m.value}<span style={{ font: `400 11px ${FONT_MONO}`, color: C.mute }}> {m.unit}</span>
                     </span>
                     <ChevronRight size={16} color={C.mute} style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform .2s", flexShrink: 0 }} />
@@ -742,7 +743,7 @@ function Bloodwork() {
 
       <div style={{ font: `400 12px ${FONT_BODY}`, color: C.mute, lineHeight: 1.5, padding: "0 4px" }}>
         Tap any marker to see its history and trend. Upload a lab report and Vitae extracts every marker automatically,
-        appending each as a new dated panel — so your timeline builds itself over time.
+        appending each as a new dated panel, so your timeline builds itself over time.
       </div>
     </div>
   );
@@ -773,7 +774,7 @@ function Nutrition() {
     const preview = URL.createObjectURL(file);
     setScan({ status: "reading", preview, error: null });
     if (!supabase) {
-      setScan({ status: "error", preview, error: "Supabase isn't connected — see the Bloodwork or Protocols tab for setup." });
+      setScan({ status: "error", preview, error: "Supabase isn't connected. See the Bloodwork or Protocols tab for setup." });
       return;
     }
     try {
@@ -854,8 +855,8 @@ function Nutrition() {
             {scan.preview && <img src={scan.preview} alt="Captured meal" style={{ width: 56, height: 56, borderRadius: 10, objectFit: "cover", flexShrink: 0 }} />}
             <div>
               <div style={{ font: `600 14px ${FONT_BODY}` }}>Confirm before saving</div>
-              <div style={{ font: `400 11px ${FONT_MONO}`, color: draft.confidence > 0.9 ? C.teal : C.amber }}>
-                {Math.round(draft.confidence * 100)}% confidence — edit anything that looks off
+              <div style={{ font: `400 11px ${FONT_MONO}`, color: draft.confidence > 0.9 ? C.teal : C.amberText }}>
+                {Math.round(draft.confidence * 100)}% confidence. Edit anything that looks off.
               </div>
             </div>
           </div>
@@ -915,7 +916,7 @@ function Nutrition() {
                 <div style={{ textAlign: "right" }}>
                   <div style={{ font: `700 15px ${FONT_DISPLAY}` }}>{m.kcal}</div>
                   <div style={{ font: `400 10px ${FONT_MONO}`,
-                    color: m.conf > 0.9 ? C.teal : C.amber, display: "flex", alignItems: "center", gap: 3, justifyContent: "flex-end" }}>
+                    color: m.conf > 0.9 ? C.teal : C.amberText, display: "flex", alignItems: "center", gap: 3, justifyContent: "flex-end" }}>
                     <Check size={10} /> {Math.round(m.conf * 100)}%
                   </div>
                 </div>
@@ -944,7 +945,7 @@ function Nutrition() {
           </div>
           <div style={{ marginTop: 22, padding: 14, background: C.panel, borderRadius: 12,
             font: `400 12px ${FONT_BODY}`, color: C.mute, lineHeight: 1.5 }}>
-            Confidence below 85% is flagged amber — tap any meal to correct the AI's estimate.
+            Confidence below 85% is flagged amber. Tap any meal to correct the AI's estimate.
           </div>
         </Card>
       </div>
@@ -1095,7 +1096,7 @@ function Protocols() {
   function openEdit(p) {
     setEditingId(p.id);
     setDraft({ type: p.type, name: p.name, dose: String(p.dose), unit: p.unit, time: p.time,
-      slot: p.slot || "AM", purpose: p.purpose === "—" ? "" : p.purpose, durationDays: p.durationDays ? String(p.durationDays) : "", days: p.days });
+      slot: p.slot || "AM", purpose: p.purpose, durationDays: p.durationDays ? String(p.durationDays) : "", days: p.days });
     setScan({ status: "idle", preview: null, detectedType: null });
     setShowForm(true);
   }
@@ -1108,7 +1109,7 @@ function Protocols() {
     const palette = draft.type === "supplement" ? supplementPalette : peptidePalette;
     const patch = {
       type: draft.type, name: draft.name, dose: parseFloat(draft.dose), unit: draft.unit,
-      time: draft.time, slot: draft.slot, days: draft.days, purpose: draft.purpose || "—",
+      time: draft.time, slot: draft.slot, days: draft.days, purpose: draft.purpose || "",
       duration_days: draft.durationDays ? parseInt(draft.durationDays, 10) : null,
     };
     if (editingId != null) {
@@ -1255,7 +1256,7 @@ function Protocols() {
                         </>
                       ) : scan.status === "error" ? (
                         <>
-                          <div style={{ font: `600 13px ${FONT_BODY}`, color: C.coral }}>Couldn't read that label</div>
+                          <div style={{ font: `600 13px ${FONT_BODY}`, color: C.coralText }}>Couldn't read that label</div>
                           <div style={{ font: `400 11px ${FONT_BODY}`, color: C.ink }}>{scan.error}</div>
                         </>
                       ) : (
@@ -1434,7 +1435,7 @@ function Protocols() {
 
           {supabase && !loading && active.length === 0 && (
             <Card style={{ textAlign: "center", color: C.mute, font: `400 13px ${FONT_BODY}` }}>
-              No active protocols yet — add one above to start tracking.
+              No active protocols yet. Add one above to start tracking.
             </Card>
           )}
 
@@ -1544,7 +1545,7 @@ function Protocols() {
           </div>
 
           <div style={{ font: `400 12px ${FONT_BODY}`, color: C.mute, lineHeight: 1.5, padding: "0 4px" }}>
-            Check off each dose as you take it — Vitae logs the date so your adherence builds a record. When a protocol finishes its
+            Check off each dose as you take it. Vitae logs the date so your adherence builds a record. When a protocol finishes its
             course, archive it to keep a dated history you can revisit or restart.
           </div>
         </>
@@ -1596,7 +1597,7 @@ function Protocols() {
                     </div>
                     <div>
                       <div style={{ font: `400 9px ${FONT_MONO}`, color: C.mute, textTransform: "uppercase", letterSpacing: "0.08em" }}>Dates taken</div>
-                      <div style={{ font: `600 13px ${FONT_BODY}`, marginTop: 2 }}>{fmtLongDate(a.startDate)} – {fmtLongDate(a.endDate)}</div>
+                      <div style={{ font: `600 13px ${FONT_BODY}`, marginTop: 2 }}>{fmtLongDate(a.startDate)} - {fmtLongDate(a.endDate)}</div>
                     </div>
                     <div>
                       <div style={{ font: `400 9px ${FONT_MONO}`, color: C.mute, textTransform: "uppercase", letterSpacing: "0.08em" }}>Adherence</div>
