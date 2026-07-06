@@ -36,16 +36,17 @@ const FONT_DISPLAY = "'Geist', system-ui, sans-serif";
 const FONT_BODY = "'Geist', system-ui, sans-serif";
 const FONT_MONO = "'Geist Mono', ui-monospace, monospace";
 
-// ---------- simulated data ----------
-const today = { date: "Sat 27 Jun", caloriesIn: 1840, caloriesTarget: 2200, caloriesOut: 2640,
-  steps: 8420, stepsTarget: 10000, resting: 54, sleep: 7.2, water: 1.6, waterTarget: 2.5 };
+// ---------- targets & estimates (until Garmin lands, "out" is an estimate) ----------
+const targets = { caloriesTarget: 2200, caloriesOutEstimate: 2600,
+  steps: 8420, stepsTarget: 10000, resting: 54, sleep: 7.2, waterTarget: 2.5 };
 
-const weekEnergy = [
-  { d: "Mon", in: 2100, out: 2400 }, { d: "Tue", in: 1950, out: 2750 },
-  { d: "Wed", in: 2300, out: 2200 }, { d: "Thu", in: 1820, out: 2600 },
-  { d: "Fri", in: 2050, out: 2900 }, { d: "Sat", in: 1840, out: 2640 },
-  { d: "Sun", in: 0, out: 0 },
-];
+function liveDateLabel() {
+  return new Date().toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+}
+function isoDaysAgo(n) {
+  const d = new Date(); d.setDate(d.getDate() - n);
+  return d.toISOString().slice(0, 10);
+}
 
 const BLOOD_PANEL_NAMES = ["Lipids", "Metabolic", "Thyroid", "Vitamins & minerals", "Inflammation", "Liver & kidney", "Hormones"];
 
@@ -266,11 +267,11 @@ function Vitae() {
           padding: "22px 4px 18px" }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
             <span style={{ font: `700 26px/1 ${FONT_DISPLAY}`, letterSpacing: "-0.01em" }}>Vitae</span>
-            <span style={{ font: `400 12px/1 ${FONT_MONO}`, color: C.mute }}>{today.date}</span>
+            <span style={{ font: `400 12px/1 ${FONT_MONO}`, color: C.mute }}>{liveDateLabel()}</span>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, font: `500 12px ${FONT_BODY}`, color: C.teal }}>
-              <Watch size={15} /> Garmin · synced 9m ago
+            <div style={{ display: "flex", alignItems: "center", gap: 8, font: `500 12px ${FONT_BODY}`, color: C.mute }}>
+              <Watch size={15} /> Garmin · coming soon
             </div>
             {supabase && session && (
               <button onClick={() => supabase.auth.signOut()}
@@ -309,7 +310,55 @@ function Vitae() {
 
 // ---------- OVERVIEW ----------
 function Overview() {
-  const net = today.caloriesIn - today.caloriesOut;
+  const TODAY_ISO = isoDaysAgo(0);
+  const [weekIn, setWeekIn] = useState(null);   // iso date -> kcal logged
+  const [water, setWater] = useState(null);     // liters logged today
+  const [alert, setAlert] = useState(null);     // most out-of-range marker
+  const [checked, setChecked] = useState(false);
+
+  const load = useCallback(async () => {
+    if (!supabase) return;
+    const [{ data: mealRows }, { data: dm }, { data: markers }] = await Promise.all([
+      supabase.from("meals").select("kcal, eaten_on").gte("eaten_on", isoDaysAgo(6)),
+      supabase.from("daily_metrics").select("water_l").eq("day", isoDaysAgo(0)).maybeSingle(),
+      supabase.from("blood_markers").select("*").order("taken_on"),
+    ]);
+    const byDay = {};
+    for (const r of mealRows || []) byDay[r.eaten_on] = (byDay[r.eaten_on] || 0) + r.kcal;
+    setWeekIn(byDay);
+    setWater(dm ? Number(dm.water_l) : 0);
+    let worst = null;
+    for (const p of groupMarkers(markers || [])) {
+      for (const m of p.markers) {
+        const st = markerStatus(m);
+        if (st === "ok") continue;
+        const span = ((isFinite(m.high) ? m.high : m.low * 2) - m.low) || 1;
+        const dev = st === "high" ? (m.value - m.high) / span : (m.low - m.value) / span;
+        if (!worst || dev > worst.dev) worst = { ...m, status: st, dev };
+      }
+    }
+    setAlert(worst);
+    setChecked(true);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  async function addWater() {
+    if (!supabase) return;
+    const next = Math.round(((water || 0) + 0.25) * 100) / 100;
+    await supabase.from("daily_metrics").upsert({ day: TODAY_ISO, water_l: next }, { onConflict: "user_id,day" });
+    setWater(next);
+  }
+
+  const caloriesIn = supabase ? (weekIn ? weekIn[TODAY_ISO] || 0 : 0) : 1840;
+  const estOut = targets.caloriesOutEstimate;
+  const net = caloriesIn - estOut;
+  const waterNow = supabase ? (water || 0) : 1.6;
+  const week = [...Array(7)].map((_, i) => {
+    const iso = isoDaysAgo(6 - i);
+    return { d: new Date(iso + "T12:00:00").toLocaleDateString("en-US", { weekday: "short" }),
+      in: weekIn ? weekIn[iso] || 0 : 0, out: estOut };
+  });
+
   return (
     <div style={{ display: "grid", gap: 16 }}>
       {/* Hero: energy balance — the thesis of the whole product */}
@@ -324,11 +373,11 @@ function Overview() {
           </div>
         </div>
         <div style={{ display: "flex", gap: 24, marginTop: 18, font: `400 13px ${FONT_MONO}`, color: "#A9C4C0" }}>
-          <span><Utensils size={13} style={{ verticalAlign: -2 }} /> In {today.caloriesIn.toLocaleString()}</span>
-          <span><Flame size={13} style={{ verticalAlign: -2 }} /> Out {today.caloriesOut.toLocaleString()}</span>
+          <span><Utensils size={13} style={{ verticalAlign: -2 }} /> In {caloriesIn.toLocaleString()}</span>
+          <span><Flame size={13} style={{ verticalAlign: -2 }} /> Out {estOut.toLocaleString()} est.</span>
         </div>
         <div style={{ height: 6, background: "rgba(255,255,255,.12)", borderRadius: 99, marginTop: 18, overflow: "hidden" }}>
-          <div style={{ width: `${(today.caloriesIn / today.caloriesOut) * 100}%`, height: "100%",
+          <div style={{ width: `${Math.min(100, (caloriesIn / estOut) * 100)}%`, height: "100%",
             background: `linear-gradient(90deg, ${C.coral}, #F0A58E)`, borderRadius: 99 }} />
         </div>
       </Card>
@@ -336,44 +385,56 @@ function Overview() {
       {/* Ring row */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 16 }}>
         <Card style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
-          <Ring value={today.steps} target={today.stepsTarget} color={C.teal}>
+          <Ring value={targets.steps} target={targets.stepsTarget} color={C.teal}>
             <div>
-              <div style={{ font: `700 18px ${FONT_DISPLAY}` }}>{(today.steps / 1000).toFixed(1)}k</div>
+              <div style={{ font: `700 18px ${FONT_DISPLAY}` }}>{(targets.steps / 1000).toFixed(1)}k</div>
               <div style={{ font: `400 10px ${FONT_MONO}`, color: C.mute }}>steps</div>
             </div>
           </Ring>
           <Eyebrow>Movement</Eyebrow>
         </Card>
         <Card style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
-          <Ring value={today.caloriesIn} target={today.caloriesTarget} color={C.coral}>
+          <Ring value={caloriesIn} target={targets.caloriesTarget} color={C.coral}>
             <div>
-              <div style={{ font: `700 18px ${FONT_DISPLAY}` }}>{today.caloriesIn}</div>
-              <div style={{ font: `400 10px ${FONT_MONO}`, color: C.mute }}>/ {today.caloriesTarget}</div>
+              <div style={{ font: `700 18px ${FONT_DISPLAY}` }}>{caloriesIn}</div>
+              <div style={{ font: `400 10px ${FONT_MONO}`, color: C.mute }}>/ {targets.caloriesTarget}</div>
             </div>
           </Ring>
           <Eyebrow>Intake</Eyebrow>
         </Card>
         <Card style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
-          <Ring value={today.water} target={today.waterTarget} color="#3B9BD0">
+          <Ring value={waterNow} target={targets.waterTarget} color="#3B9BD0">
             <div>
-              <div style={{ font: `700 18px ${FONT_DISPLAY}` }}>{today.water}L</div>
-              <div style={{ font: `400 10px ${FONT_MONO}`, color: C.mute }}>/ {today.waterTarget}L</div>
+              <div style={{ font: `700 18px ${FONT_DISPLAY}` }}>{waterNow}L</div>
+              <div style={{ font: `400 10px ${FONT_MONO}`, color: C.mute }}>/ {targets.waterTarget}L</div>
             </div>
           </Ring>
-          <Eyebrow>Hydration</Eyebrow>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <Eyebrow>Hydration</Eyebrow>
+            {supabase && (
+              <button onClick={addWater}
+                style={{ appearance: "none", cursor: "pointer", border: `1px solid ${C.line}`, background: C.bg,
+                  color: "#3B9BD0", borderRadius: 7, padding: "3px 8px", font: `600 11px ${FONT_BODY}` }}>
+                +250ml
+              </button>
+            )}
+          </div>
         </Card>
         <Card style={{ display: "flex", flexDirection: "column", justifyContent: "center", gap: 14 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <Heart size={18} color={C.coral} />
-            <div><div style={{ font: `700 18px ${FONT_DISPLAY}` }}>{today.resting}</div>
+            <div><div style={{ font: `700 18px ${FONT_DISPLAY}` }}>{targets.resting}</div>
               <div style={{ font: `400 10px ${FONT_MONO}`, color: C.mute }}>resting bpm</div></div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <Moon size={18} color={C.teal} />
-            <div><div style={{ font: `700 18px ${FONT_DISPLAY}` }}>{today.sleep}h</div>
+            <div><div style={{ font: `700 18px ${FONT_DISPLAY}` }}>{targets.sleep}h</div>
               <div style={{ font: `400 10px ${FONT_MONO}`, color: C.mute }}>sleep</div></div>
           </div>
         </Card>
+      </div>
+      <div style={{ font: `400 11px ${FONT_MONO}`, color: C.mute, padding: "0 4px", marginTop: -6 }}>
+        Steps, heart rate, sleep and energy-out are sample values until Garmin connects. Intake and hydration are yours.
       </div>
 
       {/* Weekly energy + blood flag */}
@@ -381,10 +442,10 @@ function Overview() {
         <Card>
           <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 14 }}>
             <Eyebrow>Energy · 7 days</Eyebrow>
-            <span style={{ font: `400 11px ${FONT_MONO}`, color: C.mute }}>in vs out</span>
+            <span style={{ font: `400 11px ${FONT_MONO}`, color: C.mute }}>in vs est. out</span>
           </div>
           <ResponsiveContainer width="100%" height={180}>
-            <AreaChart data={weekEnergy} margin={{ left: -20, right: 4 }}>
+            <AreaChart data={week} margin={{ left: -20, right: 4 }}>
               <defs>
                 <linearGradient id="gOut" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stopColor={C.teal} stopOpacity={0.25} />
@@ -401,21 +462,37 @@ function Overview() {
           </ResponsiveContainer>
         </Card>
 
-        <Card style={{ borderColor: C.coralSoft, background: C.coralSoft }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <AlertCircle size={16} color={C.coral} />
-            <Eyebrow>Needs attention</Eyebrow>
-          </div>
-          <div style={{ marginTop: 14 }}>
-            <div style={{ font: `700 17px ${FONT_DISPLAY}` }}>LDL cholesterol</div>
-            <div style={{ font: `700 32px/1.1 ${FONT_DISPLAY}`, color: C.coral, marginTop: 4 }}>138
-              <span style={{ font: `400 13px ${FONT_MONO}`, color: C.mute }}> mg/dL</span></div>
-            <div style={{ font: `400 12px ${FONT_BODY}`, color: C.ink, marginTop: 8, lineHeight: 1.5 }}>
-              8 points above range, trending up across your last 5 panels. CRP also elevated.
+        {alert ? (
+          <Card style={{ borderColor: C.coralSoft, background: C.coralSoft }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <AlertCircle size={16} color={C.coral} />
+              <Eyebrow>Needs attention</Eyebrow>
             </div>
-          </div>
-          <Sparkline data={[122, 128, 131, 135, 138]} color={C.coral} />
-        </Card>
+            <div style={{ marginTop: 14 }}>
+              <div style={{ font: `700 17px ${FONT_DISPLAY}` }}>{alert.key}</div>
+              <div style={{ font: `700 32px/1.1 ${FONT_DISPLAY}`, color: C.coralText, marginTop: 4 }}>{alert.value}
+                <span style={{ font: `400 13px ${FONT_MONO}`, color: C.mute }}> {alert.unit}</span></div>
+              <div style={{ font: `400 12px ${FONT_BODY}`, color: C.ink, marginTop: 8, lineHeight: 1.5 }}>
+                {alert.status === "high"
+                  ? `Above the ${alert.high} upper limit across your latest panel.`
+                  : `Below the ${alert.low} lower limit across your latest panel.`} See Bloodwork for the trend.
+              </div>
+            </div>
+            {alert.history.length > 1 && <Sparkline data={alert.history.map((h) => h.value)} color={C.coral} />}
+          </Card>
+        ) : (
+          <Card style={{ borderColor: C.tealSoft, background: C.tealSoft }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <Check size={16} color={C.teal} />
+              <Eyebrow>Bloodwork</Eyebrow>
+            </div>
+            <div style={{ font: `400 13px ${FONT_BODY}`, color: C.ink, marginTop: 14, lineHeight: 1.6 }}>
+              {checked
+                ? "All tracked markers are in range. Upload your next lab report in the Bloodwork tab to keep the timeline going."
+                : "Marker data loads here once you're connected. Upload a lab report in the Bloodwork tab to start."}
+            </div>
+          </Card>
+        )}
       </div>
     </div>
   );
@@ -760,10 +837,19 @@ function fileToBase64(file) {
 }
 
 function Nutrition() {
-  const [mealList, setMealList] = useState(meals);
+  const [mealList, setMealList] = useState(supabase ? [] : meals);
   const [scan, setScan] = useState({ status: "idle", preview: null, error: null }); // idle | reading | review | error
   const [draft, setDraft] = useState(null);
   const fileRef = React.useRef(null);
+
+  const loadMeals = useCallback(async () => {
+    if (!supabase) return;
+    const { data } = await supabase.from("meals").select("*")
+      .eq("eaten_on", isoDaysAgo(0)).order("eaten_at");
+    setMealList((data || []).map((r) => ({ id: r.id, name: r.name, kcal: r.kcal,
+      conf: r.confidence == null ? 1 : Number(r.confidence), time: r.eaten_at, p: r.protein, c: r.carbs, f: r.fat })));
+  }, []);
+  useEffect(() => { loadMeals(); }, [loadMeals]);
 
   const total = mealList.reduce((s, m) => s + m.kcal, 0);
   const macros = mealList.reduce((a, m) => ({ p: a.p + m.p, c: a.c + m.c, f: a.f + m.f }), { p: 0, c: 0, f: 0 });
@@ -790,14 +876,30 @@ function Nutrition() {
     }
   }
 
-  function confirmMeal() {
+  async function confirmMeal() {
     if (!draft || !draft.name || draft.kcal === "") return;
-    setMealList((ms) => [...ms, {
+    const meal = {
       name: draft.name, kcal: Math.round(parseFloat(draft.kcal) || 0), conf: draft.confidence,
       time: new Date().toTimeString().slice(0, 5),
       p: Math.round(parseFloat(draft.protein) || 0), c: Math.round(parseFloat(draft.carbs) || 0), f: Math.round(parseFloat(draft.fat) || 0),
-    }]);
+    };
+    if (supabase) {
+      await supabase.from("meals").insert({ name: meal.name, kcal: meal.kcal, protein: meal.p,
+        carbs: meal.c, fat: meal.f, confidence: meal.conf, eaten_at: meal.time });
+      await loadMeals();
+    } else {
+      setMealList((ms) => [...ms, meal]);
+    }
     dismissScan();
+  }
+
+  async function removeMeal(m, i) {
+    if (supabase && m.id) {
+      await supabase.from("meals").delete().eq("id", m.id);
+      await loadMeals();
+    } else {
+      setMealList((ms) => ms.filter((_, j) => j !== i));
+    }
   }
   function dismissScan() {
     setScan({ status: "idle", preview: null, error: null });
@@ -898,10 +1000,15 @@ function Nutrition() {
       <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: 16 }} className="nut-split">
         {/* Meal log */}
         <Card>
-          <Eyebrow>Today · {mealList.length} meals · {total} kcal</Eyebrow>
+          <Eyebrow>{mealList.length} meals today · {total} kcal</Eyebrow>
           <div style={{ marginTop: 14, display: "grid", gap: 4 }}>
+            {mealList.length === 0 && (
+              <div style={{ font: `400 13px ${FONT_BODY}`, color: C.mute, padding: "18px 0", textAlign: "center" }}>
+                No meals logged today. Snap a photo above to log your first.
+              </div>
+            )}
             {mealList.map((m, i) => (
-              <div key={i} style={{ display: "flex", alignItems: "center", gap: 14, padding: "12px 0",
+              <div key={m.id || i} style={{ display: "flex", alignItems: "center", gap: 14, padding: "12px 0",
                 borderBottom: i < mealList.length - 1 ? `1px solid ${C.line}` : "none" }}>
                 <div style={{ width: 44, height: 44, borderRadius: 11, background: C.coralSoft,
                   display: "grid", placeItems: "center", flexShrink: 0 }}>
@@ -920,6 +1027,11 @@ function Nutrition() {
                     <Check size={10} /> {Math.round(m.conf * 100)}%
                   </div>
                 </div>
+                <button onClick={() => removeMeal(m, i)} aria-label={`Delete ${m.name}`}
+                  style={{ appearance: "none", cursor: "pointer", border: `1px solid ${C.line}`, background: C.bg,
+                    color: C.mute, borderRadius: 8, padding: 6, display: "grid", placeItems: "center", flexShrink: 0 }}>
+                  <Trash2 size={13} />
+                </button>
               </div>
             ))}
           </div>
@@ -937,7 +1049,7 @@ function Nutrition() {
                     <span>{label}</span><span style={{ font: `400 12px ${FONT_MONO}`, color: C.mute }}>{g}g</span>
                   </div>
                   <div style={{ height: 8, background: C.line, borderRadius: 99, overflow: "hidden" }}>
-                    <div style={{ width: `${(g / sum) * 100}%`, height: "100%", background: col, borderRadius: 99 }} />
+                    <div style={{ width: `${sum ? (g / sum) * 100 : 0}%`, height: "100%", background: col, borderRadius: 99 }} />
                   </div>
                 </div>
               );
