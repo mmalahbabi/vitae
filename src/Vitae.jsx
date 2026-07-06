@@ -1000,7 +1000,7 @@ function Nutrition() {
       <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: 16 }} className="nut-split">
         {/* Meal log */}
         <Card>
-          <Eyebrow>{mealList.length} meals today · {total} kcal</Eyebrow>
+          <Eyebrow>{mealList.length} meal{mealList.length === 1 ? "" : "s"} today · {total} kcal</Eyebrow>
           <div style={{ marginTop: 14, display: "grid", gap: 4 }}>
             {mealList.length === 0 && (
               <div style={{ font: `400 13px ${FONT_BODY}`, color: C.mute, padding: "18px 0", textAlign: "center" }}>
