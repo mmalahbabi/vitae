@@ -1,20 +1,22 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import {
-  LineChart, Line, AreaChart, Area, BarChart, Bar,
+  LineChart, Line, AreaChart, Area,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
 } from "recharts";
 import {
-  Activity, Flame, Heart, Camera, Plus,
-  Watch, Moon, Footprints, ChevronRight, Check, AlertCircle, Utensils,
+  Flame, Heart, Camera, Plus,
+  Moon, ChevronRight, Check, AlertCircle, Utensils,
   Syringe, Clock, Pill, Sun, Pencil, Archive, Circle, RotateCcw, Trash2, MoreHorizontal,
   TrendingUp, TrendingDown, Upload, Link2,
 } from "lucide-react";
 import { supabase } from "./lib/supabaseClient";
+import { GarminProvider, GarminStatus, GarminImportPanel, GarminTraining } from "./components/Garmin.jsx";
+import { useGarmin } from "./lib/garminContext.js";
+import { healthDay, daysBefore } from "./lib/garminDates.js";
 
 // ============================================================
-// Vitae — personal health platform prototype
-// Single-file React. All data simulated. Component-structured
-// so each "pillar" can port to a React Native screen later.
+// Vitae — personal health platform. Garmin exports and personal records
+// are stored per account in Supabase; missing readings remain unavailable.
 // ============================================================
 
 const C = {
@@ -36,16 +38,14 @@ const FONT_DISPLAY = "'Geist', system-ui, sans-serif";
 const FONT_BODY = "'Geist', system-ui, sans-serif";
 const FONT_MONO = "'Geist Mono', ui-monospace, monospace";
 
-// ---------- targets & estimates (until Garmin lands, "out" is an estimate) ----------
-const targets = { caloriesTarget: 2200, caloriesOutEstimate: 2600,
-  steps: 8420, stepsTarget: 10000, resting: 54, sleep: 7.2, waterTarget: 2.5 };
+// ---------- goals (not measured health readings) ----------
+const targets = { caloriesTarget: 2200, stepsTarget: 10000, waterTarget: 2.5 };
 
 function liveDateLabel() {
-  return new Date().toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+  return new Date().toLocaleDateString("en-GB", { timeZone: "Asia/Dubai", weekday: "short", day: "numeric", month: "short" });
 }
 function isoDaysAgo(n) {
-  const d = new Date(); d.setDate(d.getDate() - n);
-  return d.toISOString().slice(0, 10);
+  return daysBefore(healthDay(), n);
 }
 
 const BLOOD_PANEL_NAMES = ["Lipids", "Metabolic", "Thyroid", "Vitamins & minerals", "Inflammation", "Liver & kidney", "Hormones"];
@@ -96,16 +96,6 @@ const meals = [
   { name: "Grilled chicken salad", kcal: 520, conf: 0.88, time: "13:25", p: 42, c: 24, f: 22 },
   { name: "Apple & almonds", kcal: 210, conf: 0.91, time: "16:40", p: 6, c: 22, f: 13 },
   { name: "Salmon, rice, greens", kcal: 670, conf: 0.83, time: "19:50", p: 38, c: 55, f: 28 },
-];
-
-const workouts = [
-  { type: "Running", dur: "42 min", dist: "7.1 km", kcal: 540, hr: 152, when: "Today · 06:30", icon: Footprints },
-  { type: "Strength", dur: "55 min", dist: "-", kcal: 310, hr: 118, when: "Yesterday", icon: Activity },
-  { type: "Cycling", dur: "1h 18m", dist: "31 km", kcal: 720, hr: 138, when: "Thu", icon: Activity },
-];
-
-const hrZones = [
-  { z: "Z1", min: 12 }, { z: "Z2", min: 18 }, { z: "Z3", min: 8 }, { z: "Z4", min: 3 }, { z: "Z5", min: 1 },
 ];
 
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -228,9 +218,7 @@ function Sparkline({ data, color }) {
 
 // ============================================================
 function Vitae() {
-  const [tab, setTab] = useState("Overview");
   const [session, setSession] = useState(supabase ? undefined : null); // undefined = checking, null = signed out
-  const tabs = ["Overview", "Nutrition", "Training", "Protocols", "Bloodwork"];
 
   useEffect(() => {
     if (!supabase) return;
@@ -246,6 +234,14 @@ function Vitae() {
     return <AuthScreen />;
   }
 
+  return <GarminProvider key={session?.user?.id ?? "preview"} client={supabase} userId={session?.user?.id}>
+    <VitaeShell session={session} />
+  </GarminProvider>;
+}
+
+function VitaeShell({ session }) {
+  const [tab, setTab] = useState("Overview");
+  const tabs = ["Overview", "Nutrition", "Training", "Protocols", "Bloodwork"];
   return (
     <div style={{ background: C.panel, minHeight: "100vh", fontFamily: FONT_BODY, color: C.ink,
       paddingTop: "env(safe-area-inset-top)", paddingBottom: "env(safe-area-inset-bottom)" }}>
@@ -264,14 +260,14 @@ function Vitae() {
 
         {/* Header */}
         <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
-          padding: "22px 4px 18px" }}>
+          padding: "22px 4px 18px", flexWrap: "wrap", gap: 12 }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
             <span style={{ font: `700 26px/1 ${FONT_DISPLAY}`, letterSpacing: "-0.01em" }}>Vitae</span>
             <span style={{ font: `400 12px/1 ${FONT_MONO}`, color: C.mute }}>{liveDateLabel()}</span>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, font: `500 12px ${FONT_BODY}`, color: C.mute }}>
-              <Watch size={15} /> Garmin · coming soon
+              <GarminStatus />
             </div>
             {supabase && session && (
               <button onClick={() => supabase.auth.signOut()}
@@ -284,7 +280,7 @@ function Vitae() {
         </header>
 
         {/* Tabs */}
-        <nav style={{ display: "flex", gap: 4, borderBottom: `1px solid ${C.line}`, marginBottom: 22 }}>
+        <nav style={{ display: "flex", gap: 4, overflowX: "auto", borderBottom: `1px solid ${C.line}`, marginBottom: 22 }}>
           {tabs.map((t) => (
             <button key={t} onClick={() => setTab(t)}
               style={{ appearance: "none", border: "none", background: "none", cursor: "pointer",
@@ -300,7 +296,7 @@ function Vitae() {
           {tab === "Overview" && <Overview />}
           {tab === "Bloodwork" && <Bloodwork />}
           {tab === "Nutrition" && <Nutrition />}
-          {tab === "Training" && <Training />}
+          {tab === "Training" && <GarminTraining />}
           {tab === "Protocols" && <Protocols />}
         </main>
       </div>
@@ -310,7 +306,9 @@ function Vitae() {
 
 // ---------- OVERVIEW ----------
 function Overview() {
-  const TODAY_ISO = isoDaysAgo(0);
+  const garmin = useGarmin();
+  const TODAY_ISO = garmin.today;
+  const measured = garmin.days.find(row => row.day === TODAY_ISO);
   const [weekIn, setWeekIn] = useState(null);   // iso date -> kcal logged
   const [water, setWater] = useState(null);     // liters logged today
   const [alert, setAlert] = useState(null);     // most out-of-range marker
@@ -320,7 +318,7 @@ function Overview() {
     if (!supabase) return;
     const [{ data: mealRows }, { data: dm }, { data: markers }] = await Promise.all([
       supabase.from("meals").select("kcal, eaten_on").gte("eaten_on", isoDaysAgo(6)),
-      supabase.from("daily_metrics").select("water_l").eq("day", isoDaysAgo(0)).maybeSingle(),
+      supabase.from("daily_metrics").select("water_l").eq("day", TODAY_ISO).maybeSingle(),
       supabase.from("blood_markers").select("*").order("taken_on"),
     ]);
     const byDay = {};
@@ -339,7 +337,7 @@ function Overview() {
     }
     setAlert(worst);
     setChecked(true);
-  }, []);
+  }, [TODAY_ISO]);
   useEffect(() => { load(); }, [load]);
 
   async function addWater() {
@@ -350,13 +348,13 @@ function Overview() {
   }
 
   const caloriesIn = supabase ? (weekIn ? weekIn[TODAY_ISO] || 0 : 0) : 1840;
-  const estOut = targets.caloriesOutEstimate;
-  const net = caloriesIn - estOut;
+  const caloriesOut = measured?.total_kcal == null ? null : Number(measured.total_kcal);
+  const net = caloriesOut == null ? null : caloriesIn - caloriesOut;
   const waterNow = supabase ? (water || 0) : 1.6;
   const week = [...Array(7)].map((_, i) => {
     const iso = isoDaysAgo(6 - i);
     return { d: new Date(iso + "T12:00:00").toLocaleDateString("en-US", { weekday: "short" }),
-      in: weekIn ? weekIn[iso] || 0 : 0, out: estOut };
+      in: weekIn ? weekIn[iso] || 0 : 0, out: garmin.days.find(row => row.day === iso)?.total_kcal ?? null };
   });
 
   return (
@@ -366,18 +364,18 @@ function Overview() {
         <Eyebrow>Today's energy balance</Eyebrow>
         <div style={{ display: "flex", alignItems: "flex-end", gap: 16, marginTop: 12 }}>
           <div style={{ font: `700 56px/0.9 ${FONT_DISPLAY}`, color: net < 0 ? "#7FD1C6" : C.coral }}>
-            {net > 0 ? "+" : "−"}{Math.abs(net).toLocaleString()}
+            {net == null ? "—" : `${net > 0 ? "+" : net < 0 ? "−" : ""}${Math.abs(net).toLocaleString()}`}
           </div>
           <div style={{ font: `400 14px ${FONT_BODY}`, color: "#A9C4C0", paddingBottom: 8 }}>
-            kcal {net < 0 ? "deficit" : "surplus"}
+            {net == null ? "Awaiting daily calories" : `kcal ${net < 0 ? "deficit" : "surplus"}`}
           </div>
         </div>
         <div style={{ display: "flex", gap: 24, marginTop: 18, font: `400 13px ${FONT_MONO}`, color: "#A9C4C0" }}>
           <span><Utensils size={13} style={{ verticalAlign: -2 }} /> In {caloriesIn.toLocaleString()}</span>
-          <span><Flame size={13} style={{ verticalAlign: -2 }} /> Out {estOut.toLocaleString()} est.</span>
+          <span><Flame size={13} style={{ verticalAlign: -2 }} /> Out {caloriesOut == null ? "—" : `${caloriesOut.toLocaleString()} · Garmin`}</span>
         </div>
         <div style={{ height: 6, background: "rgba(255,255,255,.12)", borderRadius: 99, marginTop: 18, overflow: "hidden" }}>
-          <div style={{ width: `${Math.min(100, (caloriesIn / estOut) * 100)}%`, height: "100%",
+          <div style={{ width: `${Math.min(100, caloriesOut > 0 ? (caloriesIn / caloriesOut) * 100 : 0)}%`, height: "100%",
             background: `linear-gradient(90deg, ${C.coral}, #F0A58E)`, borderRadius: 99 }} />
         </div>
       </Card>
@@ -385,9 +383,9 @@ function Overview() {
       {/* Ring row */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 16 }}>
         <Card style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
-          <Ring value={targets.steps} target={targets.stepsTarget} color={C.teal}>
+          <Ring value={measured?.steps ?? 0} target={targets.stepsTarget} color={C.teal}>
             <div>
-              <div style={{ font: `700 18px ${FONT_DISPLAY}` }}>{(targets.steps / 1000).toFixed(1)}k</div>
+              <div style={{ font: `700 18px ${FONT_DISPLAY}` }}>{measured?.steps == null ? "—" : Number(measured.steps).toLocaleString()}</div>
               <div style={{ font: `400 10px ${FONT_MONO}`, color: C.mute }}>steps</div>
             </div>
           </Ring>
@@ -423,26 +421,29 @@ function Overview() {
         <Card style={{ display: "flex", flexDirection: "column", justifyContent: "center", gap: 14 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <Heart size={18} color={C.coral} />
-            <div><div style={{ font: `700 18px ${FONT_DISPLAY}` }}>{targets.resting}</div>
+            <div><div style={{ font: `700 18px ${FONT_DISPLAY}` }}>{measured?.resting_hr ?? "—"}</div>
               <div style={{ font: `400 10px ${FONT_MONO}`, color: C.mute }}>resting bpm</div></div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <Moon size={18} color={C.teal} />
-            <div><div style={{ font: `700 18px ${FONT_DISPLAY}` }}>{targets.sleep}h</div>
+            <div><div style={{ font: `700 18px ${FONT_DISPLAY}` }}>{measured?.sleep_seconds == null ? "—" : `${(measured.sleep_seconds / 3600).toFixed(1)}h`}</div>
               <div style={{ font: `400 10px ${FONT_MONO}`, color: C.mute }}>sleep</div></div>
           </div>
         </Card>
       </div>
       <div style={{ font: `400 11px ${FONT_MONO}`, color: C.mute, padding: "0 4px", marginTop: -6 }}>
-        Steps, heart rate, sleep and energy-out are sample values until Garmin connects. Intake and hydration are yours.
+        Garmin readings above are for {TODAY_ISO} (UAE day). — means no imported measurement for today.
+        Recorded calorie expenditure is a device estimate; exports can contain an incomplete day. Workout calories are already included in daily totals.
       </div>
+
+      <GarminImportPanel />
 
       {/* Weekly energy + blood flag */}
       <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 16 }} className="ov-split">
         <Card>
           <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 14 }}>
             <Eyebrow>Energy · 7 days</Eyebrow>
-            <span style={{ font: `400 11px ${FONT_MONO}`, color: C.mute }}>in vs est. out</span>
+            <span style={{ font: `400 11px ${FONT_MONO}`, color: C.mute }}>intake vs Garmin daily out</span>
           </div>
           <ResponsiveContainer width="100%" height={180}>
             <AreaChart data={week} margin={{ left: -20, right: 4 }}>
@@ -880,12 +881,12 @@ function Nutrition() {
     if (!draft || !draft.name || draft.kcal === "") return;
     const meal = {
       name: draft.name, kcal: Math.round(parseFloat(draft.kcal) || 0), conf: draft.confidence,
-      time: new Date().toTimeString().slice(0, 5),
+      time: new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Dubai', hour: '2-digit', minute: '2-digit' }),
       p: Math.round(parseFloat(draft.protein) || 0), c: Math.round(parseFloat(draft.carbs) || 0), f: Math.round(parseFloat(draft.fat) || 0),
     };
     if (supabase) {
       await supabase.from("meals").insert({ name: meal.name, kcal: meal.kcal, protein: meal.p,
-        carbs: meal.c, fat: meal.f, confidence: meal.conf, eaten_at: meal.time });
+        carbs: meal.c, fat: meal.f, confidence: meal.conf, eaten_at: meal.time, eaten_on: healthDay() });
       await loadMeals();
     } else {
       setMealList((ms) => [...ms, meal]);
@@ -1066,69 +1067,6 @@ function Nutrition() {
 }
 
 // ---------- TRAINING ----------
-function Training() {
-  return (
-    <div style={{ display: "grid", gap: 16 }}>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }} className="tr-split">
-        <Card>
-          <Eyebrow>HR zones · today's run</Eyebrow>
-          <ResponsiveContainer width="100%" height={190}>
-            <BarChart data={hrZones} margin={{ left: -24, top: 16 }}>
-              <CartesianGrid strokeDasharray="2 4" stroke={C.line} vertical={false} />
-              <XAxis dataKey="z" tick={{ font: `400 11px ${FONT_MONO}`, fill: C.mute }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ font: `400 10px ${FONT_MONO}`, fill: C.mute }} axisLine={false} tickLine={false} />
-              <Tooltip contentStyle={{ borderRadius: 12, border: `1px solid ${C.line}`, font: `12px ${FONT_BODY}` }} cursor={{ fill: C.tealSoft }} />
-              <Bar dataKey="min" fill={C.teal} radius={[6, 6, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </Card>
-        <Card style={{ display: "flex", flexDirection: "column", justifyContent: "center", gap: 18 }}>
-          <Eyebrow>This week · from Garmin</Eyebrow>
-          <div style={{ display: "flex", gap: 28 }}>
-            <div><div style={{ font: `700 34px/1 ${FONT_DISPLAY}`, color: C.teal }}>4</div>
-              <div style={{ font: `400 11px ${FONT_MONO}`, color: C.mute }}>sessions</div></div>
-            <div><div style={{ font: `700 34px/1 ${FONT_DISPLAY}`, color: C.teal }}>3h 35m</div>
-              <div style={{ font: `400 11px ${FONT_MONO}`, color: C.mute }}>active time</div></div>
-            <div><div style={{ font: `700 34px/1 ${FONT_DISPLAY}`, color: C.coral }}>1,570</div>
-              <div style={{ font: `400 11px ${FONT_MONO}`, color: C.mute }}>kcal burned</div></div>
-          </div>
-          <div style={{ font: `400 12px ${FONT_BODY}`, color: C.mute, lineHeight: 1.5 }}>
-            Workouts flow in automatically over the Garmin Connect API and feed your daily energy-out total.
-          </div>
-        </Card>
-      </div>
-
-      <Card>
-        <Eyebrow>Recent activities</Eyebrow>
-        <div style={{ marginTop: 12, display: "grid", gap: 4 }}>
-          {workouts.map((w, i) => {
-            const Icon = w.icon;
-            return (
-              <div key={i} style={{ display: "flex", alignItems: "center", gap: 14, padding: "13px 0",
-                borderBottom: i < workouts.length - 1 ? `1px solid ${C.line}` : "none" }}>
-                <div style={{ width: 44, height: 44, borderRadius: 11, background: C.tealSoft,
-                  display: "grid", placeItems: "center", flexShrink: 0 }}>
-                  <Icon size={20} color={C.teal} />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ font: `600 14px ${FONT_BODY}` }}>{w.type}</div>
-                  <div style={{ font: `400 11px ${FONT_MONO}`, color: C.mute }}>{w.when}</div>
-                </div>
-                <div style={{ display: "flex", gap: 22, font: `400 12px ${FONT_MONO}`, color: C.mute }}>
-                  <span>{w.dur}</span><span>{w.dist}</span>
-                  <span style={{ color: C.coral }}>{w.kcal} kcal</span>
-                  <span style={{ color: C.ink, display: "flex", alignItems: "center", gap: 3 }}><Heart size={12} color={C.coral} /> {w.hr}</span>
-                </div>
-                <ChevronRight size={16} color={C.mute} />
-              </div>
-            );
-          })}
-        </div>
-      </Card>
-    </div>
-  );
-}
-
 // ---------- PROTOCOLS ----------
 function Protocols() {
   const now = new Date();
