@@ -13,6 +13,14 @@ dist-capacitor
 dist-ssr
 *.local
 supabase/.temp
+test-results
+playwright-report
+# Garmin exports contain private health and location data. Never commit them.
+DI_CONNECT/
+DI-Connect-*/
+UDSFile*.json
+*sleepData.json
+*summarizedActivities.json
 
 # Editor directories and files
 .vscode/*

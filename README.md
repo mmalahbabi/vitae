@@ -1,4 +1,20 @@
-# React + Vite
+# Vitae
+
+Private health monitoring built with React, Capacitor and Supabase.
+
+The existing dashboard now supports manual Garmin Account Management exports
+(ZIP or supported JSON files). See [Garmin import setup, formats, privacy and
+deployment](docs/garmin-import.md). Automatic Garmin synchronization is not connected.
+
+Run `npm ci`, configure `.env.local` using `.env.example`, then `npm run dev`.
+Apply the migrations in `supabase/migrations` to a configured Supabase project
+before saving real records. Never put a Supabase service-role key in client code.
+
+Run `npm test` for parser and database authorization tests. `npm run test:browser`
+runs the import flow against a synthetic backend after installing Playwright's
+Chromium with `npx playwright install chromium`.
+
+## Original Vite template notes
 
 This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
 
